@@ -41,3 +41,18 @@ TARGET_EID = 0x09
 # special).
 OUR_I2C_ADDR = 0x08
 OUR_EID = 0x08
+
+# Confirmed against source with the peer session, 2026-08-25 (reasoned
+# through the code, NOT wire-verified -- same caveat as everything else
+# in this repo until the second bus is physically connected):
+# this platform's Get Endpoint ID handler sets eid_type=STATIC_EID and
+# endpoint_type=BRIDGE, i.e. mctp.EID_TYPE_STATIC / mctp.ENDPOINT_TYPE_BRIDGE.
+EXPECTED_EID_TYPE_ON_THIS_PLATFORM = 1  # mctp.EID_TYPE_STATIC
+EXPECTED_ENDPOINT_TYPE_ON_THIS_PLATFORM = 1  # mctp.ENDPOINT_TYPE_BRIDGE
+
+# Confirmed against source with the peer session, 2026-08-25: this
+# platform's dispatch genuinely handles both MCTP Control and PLDM, and
+# load_mctp_support_types() (previously an unimplemented __weak default
+# returning a bare error -- a real gap, not a design choice) now reports
+# both. Same "reasoned through the code, not wire-verified" caveat.
+EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM = (0x00, 0x01)  # Control, PLDM

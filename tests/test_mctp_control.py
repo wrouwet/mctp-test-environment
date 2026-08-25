@@ -16,8 +16,14 @@ got burned doing for IPMI once. Tighten these once real responses are
 observed.
 """
 
+import mctp
 import mctp_helpers
-from config import TARGET_EID
+from config import (
+    EXPECTED_EID_TYPE_ON_THIS_PLATFORM,
+    EXPECTED_ENDPOINT_TYPE_ON_THIS_PLATFORM,
+    EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM,
+    TARGET_EID,
+)
 from mctp import (
     CTRL_CC_SUCCESS,
     CTRL_CMD_GET_ENDPOINT_ID,
@@ -34,15 +40,26 @@ def test_get_endpoint_id(bridge):
     live EID (currently TARGET_EID, 0x09) by calling plat_get_eid()
     fresh on every request -- so the reported EID should exactly match
     what we're already using to address it.
+
+    The response's third byte (_get_eid_resp's endpoint-type byte,
+    DSP0236) is also confirmed, not just printed: this platform's
+    handler sets eid_type=STATIC_EID and endpoint_type=BRIDGE (see
+    config.py's EXPECTED_*_ON_THIS_PLATFORM constants for the "reasoned
+    through the code, not wire-verified yet" caveat that applies to
+    this specific claim).
     """
     decoded = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_ENDPOINT_ID)
     assert decoded["completion_code"] == CTRL_CC_SUCCESS
-    assert len(decoded["data"]) >= 1, "expected at least an EID byte"
+    assert len(decoded["data"]) >= 2, "expected at least an EID byte and an endpoint-type byte"
     reported_eid = decoded["data"][0]
     assert reported_eid == TARGET_EID, (
         f"endpoint reported EID 0x{reported_eid:02x}, expected 0x{TARGET_EID:02x} "
         f"(our own config.py's TARGET_EID -- has it changed on the device side?)"
     )
+    endpoint_type_fields = mctp.parse_endpoint_type_byte(decoded["data"][1])
+    print(f"endpoint-type byte: 0x{decoded['data'][1]:02x} -> {endpoint_type_fields}")
+    assert endpoint_type_fields["eid_type"] == EXPECTED_EID_TYPE_ON_THIS_PLATFORM
+    assert endpoint_type_fields["endpoint_type"] == EXPECTED_ENDPOINT_TYPE_ON_THIS_PLATFORM
     print(f"full response data: {decoded['data'].hex(' ')}")
 
 
@@ -61,13 +78,17 @@ def test_get_mctp_version_support(bridge):
 
 def test_get_message_type_support(bridge):
     """Get Message Type Support (cmd 0x05). Every MCTP endpoint must
-    support this. Expect MCTP Control (0x00) to always be listed (an
-    endpoint answering this command at all obviously supports Control),
-    and per the peer's earlier report that PLDM base/OEM are loaded on
-    this platform, PLDM (0x01) should show up too -- but not asserting
-    that second part, since "message type support" specifically for
-    this platform hasn't been independently confirmed against source
-    the way the header layouts have.
+    support this.
+
+    This command had a real, previously-unknown gap on this platform:
+    load_mctp_support_types() was an unimplemented __weak default
+    (returning a bare error, not a real type list) until the peer
+    session implemented it for real, 2026-08-25 -- confirmed with them
+    that this platform's dispatch genuinely handles both MCTP Control
+    (0x00) and PLDM (0x01), and the handler now reports exactly those
+    two. Same "reasoned through the code, not wire-verified yet" caveat
+    as everything else in this repo -- see EXPECTED_SUPPORTED_MESSAGE_
+    TYPES_ON_THIS_PLATFORM's comment in config.py.
     """
     decoded = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_MESSAGE_TYPE_SUPPORT)
     assert decoded["completion_code"] == CTRL_CC_SUCCESS
@@ -77,7 +98,10 @@ def test_get_message_type_support(bridge):
     # type values themselves.
     count = decoded["data"][0]
     types = decoded["data"][1:1 + count]
-    assert 0x00 in types, f"MCTP Control (0x00) should always be listed as supported; got {types.hex(' ')}"
+    assert set(types) == set(EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM), (
+        f"expected exactly {[hex(t) for t in EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM]}, "
+        f"got {[hex(t) for t in types]}"
+    )
 
 
 def test_set_endpoint_id_idempotent(bridge):

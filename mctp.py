@@ -54,6 +54,27 @@ CTRL_CC_ERROR_INVALID_LENGTH = 0x03
 CTRL_CC_ERROR_NOT_READY = 0x04
 CTRL_CC_ERROR_UNSUPPORTED_CMD = 0x05
 
+# Get Endpoint ID response's third byte (DSP0236's "Endpoint Type" byte,
+# _get_eid_resp in mctp_ctrl.h:99-107): [eid_type:2 | rsvd:2 |
+# endpoint_type:2 | rsvd:2] -- confirmed against source with the peer
+# session, 2026-08-25. eid_type and endpoint_type are each 2-bit fields,
+# so bits1-0 and bits5-4 respectively (bitfields declared in this order
+# pack LSB-first on this target, same convention already confirmed for
+# the transport/control headers).
+EID_TYPE_DYNAMIC = 0x00
+EID_TYPE_STATIC = 0x01
+ENDPOINT_TYPE_SIMPLE = 0x00
+ENDPOINT_TYPE_BRIDGE = 0x01
+
+
+def parse_endpoint_type_byte(b):
+    """Decode Get Endpoint ID's third response byte into its eid_type and
+    endpoint_type sub-fields (see the constants above)."""
+    return {
+        "eid_type": b & 0x3,
+        "endpoint_type": (b >> 4) & 0x3,
+    }
+
 
 def smbus_pec_byte(crc, b):
     """One step of the SMBus PEC CRC-8 (poly 0x07, MSB-first, no
