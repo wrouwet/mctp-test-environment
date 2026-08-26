@@ -89,9 +89,14 @@ python3 -m venv .venv
 .venv/bin/pytest tests/
 ```
 
-Until the hardware from above is connected, expect every test to fail
-at the `bridge` fixture with a clear "no bridge found" or "endpoint not
-found on bus" error -- that's expected, not a code bug (see "Current
+To also save a copy of the full run to `test_report.txt` (same
+convention as the sibling openbic-test-environment project), use
+`./run_tests.sh` instead of the raw `pytest` command above.
+
+Without the hardware from above connected, expect every test to fail at
+the `bridge` fixture with a clear "no bridge found" or "endpoint not
+found on bus" error -- that's expected, not a code bug. With it
+connected, expect 5 passed / 1 xfailed as of this writing (see "Current
 status" above).
 
 ### Reading the output
