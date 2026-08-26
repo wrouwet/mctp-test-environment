@@ -50,11 +50,12 @@ MSG_TYPE_PLDM = 0x01  # not otherwise used in this MCTP-only project
 
 # MCTP Control Protocol command codes (DSP0236), the subset this project
 # actually exercises. CTRL_CMD_SET_ENDPOINT_ID/GET_ENDPOINT_ID/
-# GET_MESSAGE_TYPE_SUPPORT are confirmed implemented on this OpenBIC
-# port; CTRL_CMD_GET_MCTP_VERSION_SUPPORT is confirmed NOT implemented
-# (see test_mctp_control.py); CTRL_CMD_GET_ENDPOINT_UUID and
-# CTRL_CMD_RESOLVE_ENDPOINT_ID are here to test against the same
-# confirmed-empty dispatch table (see test_mctp_control.py) -- their
+# GET_MCTP_VERSION_SUPPORT/GET_MESSAGE_TYPE_SUPPORT are all confirmed
+# implemented on this OpenBIC port (Get MCTP Version Support only as of
+# 2026-08-25 -- it was a confirmed gap before that, see git history and
+# test_mctp_control.py); CTRL_CMD_GET_ENDPOINT_UUID and
+# CTRL_CMD_RESOLVE_ENDPOINT_ID are confirmed NOT implemented (same
+# dispatch-table-fallthrough gap, see test_mctp_control.py) -- their
 # command code VALUES are per DSP0236, independent of what this
 # platform actually implements.
 CTRL_CMD_SET_ENDPOINT_ID = 0x01
@@ -83,6 +84,37 @@ EID_TYPE_DYNAMIC = 0x00
 EID_TYPE_STATIC = 0x01
 ENDPOINT_TYPE_SIMPLE = 0x00
 ENDPOINT_TYPE_BRIDGE = 0x01
+
+
+def parse_mctp_version_entry(data):
+    """Decode a Get MCTP Version Support response body: a 1-byte count
+    followed by that many 4-byte version entries (major, minor, update,
+    alpha). This project only ever asks for one entry (the base spec
+    itself, selector 0xFF) so this only decodes the first.
+
+    Confirmed against source with the peer session, 2026-08-25: on this
+    platform the single entry is `f1 f3 ff 00`, decoding to major=1,
+    minor=3, update=unspecified, alpha=none -- "MCTP Base Spec 1.3,
+    patch level unspecified". major/minor are BCD-ish: the low nibble is
+    the actual digit (0xF1 -> 1, 0xF3 -> 3); update uses 0xFF as a
+    literal sentinel for "not specified" rather than a digit; alpha uses
+    0x00 as a literal sentinel for "no alpha character" (a nonzero value
+    would be the ASCII character itself, e.g. 'b' for a beta release).
+    Raw, un-decoded bytes are included too so a caller can cross-check
+    directly if this decoding is ever wrong for some other entry.
+    """
+    if len(data) < 5:
+        raise ValueError(f"too short to contain a count byte + one version entry: {len(data)} bytes")
+    count = data[0]
+    major_b, minor_b, update_b, alpha_b = data[1:5]
+    return {
+        "count": count,
+        "major": major_b & 0x0F,
+        "minor": minor_b & 0x0F,
+        "update": None if update_b == 0xFF else update_b,
+        "alpha": None if alpha_b == 0x00 else chr(alpha_b),
+        "raw": (major_b, minor_b, update_b, alpha_b),
+    }
 
 
 def parse_endpoint_type_byte(b):

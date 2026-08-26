@@ -70,21 +70,27 @@ def test_get_mctp_version_support(bridge):
     test exactly the way this suite's not_implemented() mechanism is
     meant to: this test flipped to a failing XPASS the moment the peer
     session implemented it for real, forcing this update rather than
-    silently staying green under a now-stale xfail. Observed live,
-    2026-08-25: completion_code SUCCESS, data `01 f1 f3 ff 00` --
-    consistent with DSP0236's version-entry encoding (a count byte, 1,
-    followed by one 4-byte BCD-ish version entry) for something in the
-    neighborhood of "MCTP Base Specification 1.3.x", though the exact
-    nibble-level meaning of every byte isn't independently confirmed
-    here -- printed for visibility rather than asserted byte-for-byte,
-    same conservative-response-body-structure approach used elsewhere
-    in this file.
+    silently staying green under a now-stale xfail.
+
+    Response body confirmed against source with the peer session,
+    2026-08-25: `[count, major, minor, update, alpha]` = `01 f1 f3 ff 00`
+    -- one entry, "MCTP Base Spec 1.3, patch level unspecified". Safe to
+    assert byte-for-byte per that confirmation (see
+    mctp.parse_mctp_version_entry()'s docstring for the exact decoding),
+    unlike this file's more conservative tests where the response body
+    layout hasn't been independently confirmed.
     """
     decoded = mctp_helpers.send_mctp_control_command(
         bridge, CTRL_CMD_GET_MCTP_VERSION_SUPPORT, data=bytes([0xFF])
     )
     assert decoded["completion_code"] == CTRL_CC_SUCCESS
-    print(f"version support data: {decoded['data'].hex(' ')}")
+    version = mctp.parse_mctp_version_entry(decoded["data"])
+    print(f"version support: {version}")
+    assert version["count"] == 1
+    assert version["major"] == 1
+    assert version["minor"] == 3
+    assert version["update"] is None, "expected 0xFF (unspecified)"
+    assert version["alpha"] is None, "expected 0x00 (no alpha character)"
 
 
 def test_get_message_type_support(bridge):

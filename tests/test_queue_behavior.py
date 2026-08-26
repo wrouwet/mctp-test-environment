@@ -2,16 +2,22 @@
 one MCTP Control command.
 
 Mirrors the sibling openbic-test-environment project's IPMB queue-depth
-stress test (test_protocol_edge_cases.py::test_back_to_back_requests_
-queue_depth), which found a real, documented 1-deep outbound TX queue
-constraint on that transport. This is a fresh, independent probe for
-MCTP -- nobody has confirmed from source what OpenBIC's MCTP-over-SMBus
-stack does under the same kind of back-to-back load, so this test
-documents whatever is actually observed rather than assuming the IPMB
-result carries over. They're separate code paths (mctp_smbus.c vs.
-ipmb.c) even though both sit on the same underlying Zephyr LPI2C
-controller/target driver, so there's no a priori reason to expect
-identical queue depth.
+stress test, which found a real, documented 1-deep outbound TX queue
+constraint on that transport. This was a fresh, independent probe for
+MCTP rather than an assumption that the IPMB result would carry over --
+and it turned out NOT to: confirmed against source with the peer
+session, 2026-08-25, that MCTP's own TX queue (MCTP_TX_QUEUE_SIZE = 16
+in common/service/mctp/mctp.c) is plenty deep; queue starvation isn't
+the mechanism here at all. The real bug is a missing retry/re-queue in
+mctp_tx_task(): unlike IPMB's TX task, which explicitly re-enqueues a
+failed response send up to IPMB_TX_RETRY_TIME times, MCTP's version just
+logs a warning and drops the message permanently the moment
+write_data() fails even once past its own low-level retries -- so two
+back-to-back requests landing close enough together that one response's
+write hits transient bus contention (plausibly caused by the OTHER
+request/response overlapping it) means that one response is just gone,
+regardless of how much queue depth was available. A real, distinct gap
+from IPMB's, not a variant of the same one.
 """
 
 import mctp
@@ -98,7 +104,9 @@ def test_back_to_back_requests(bridge):
               f"no queue/arbitration collision occurred this run")
     else:
         missing = expected - seen.keys()
-        print(f"response(s) for inst_id={sorted(missing)} never arrived -- some "
-              f"queue/arbitration constraint is dropping concurrent requests on "
-              f"this transport too, same shape as the sibling IPMB finding (though "
-              f"a different underlying limit, not yet identified from source)")
+        print(f"response(s) for inst_id={sorted(missing)} never arrived -- consistent "
+              f"with the confirmed root cause (see this file's module docstring): "
+              f"mctp_tx_task() has no retry/re-queue on a failed response write, so "
+              f"transient contention from the overlapping request permanently drops "
+              f"whichever response loses the race, regardless of the 16-deep TX queue "
+              f"having plenty of room")
