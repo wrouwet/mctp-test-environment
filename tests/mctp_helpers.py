@@ -161,6 +161,102 @@ def _verify_and_strip_pec(raw):
     return data
 
 
+def receive_possibly_fragmented_response(bridge, cmd, inst_id, msg_tag, max_fragments=8, max_drain=3):
+    """Capture a response that may span multiple MCTP packets (SOM...EOM),
+    reassembling the message body across successive bridge.listen() calls,
+    then parse and return the final decoded Control response.
+
+    NOT YET CONFIRMED WORKING as of 2026-08-25 -- built ahead of having
+    anything that actually sends a multi-packet response to receive (the
+    peer session is adding a synthetic echo/debug command for exactly
+    this purpose). Written now so it's ready to try the moment that
+    exists, same "build it, then find out live" approach as everything
+    else in this project rather than waiting idle.
+
+    The real open question this can't answer until tested: each
+    bridge.listen() call captures exactly one complete slave-mode write
+    session (one physical START..STOP transaction), so this relies on
+    the responder sending each fragment as its own separate write AND
+    this function calling listen() again promptly enough to catch the
+    next one before it's sent -- the same pattern this project's own
+    OUTBOUND fragmentation already relies on (see mctp_helpers.py's
+    send loop), but never yet verified in the receive direction. If
+    fragments arrive faster than this can re-arm listen(), or the
+    bridge's own capture window (see the firmware's I2C_SlaveWaitForWrite
+    timeout) is too short between fragments, this may need real
+    firmware changes on the bridge side after all -- not assumed either
+    way until tried.
+
+    Correlates fragments by msg_tag -- the only identifier present on
+    EVERY fragment, including non-SOM ones (inst_id/cmd only exist
+    within the first fragment's own Control-header bytes, not on every
+    packet's transport header). A fragment with a different msg_tag
+    before the first (SOM) one is discarded as stale, up to max_drain
+    times, the same reasoning as send_mctp_control_command(); a msg_tag
+    mismatch mid-sequence (after SOM) is NOT similarly tolerated --
+    that would mean two different messages' fragments got interleaved,
+    which is a real problem worth failing loudly on, not draining past.
+    """
+    body = bytearray()
+    dest_eid = src_eid = None
+    fragments_seen = 0
+    drains = 0
+
+    while fragments_seen < max_fragments:
+        raw = bridge.listen(OUR_I2C_ADDR)
+        print(f"captured fragment attempt: {raw.hex(' ')}")
+        after_pec = _verify_and_strip_pec(raw)
+        _, mctp_packet = mctp.parse_smbus_block_wrapper(after_pec)
+        hdr = mctp.parse_transport_header(mctp_packet)
+        chunk = mctp_packet[4:]
+        print(f"decoded transport header: {hdr}, chunk length {len(chunk)}")
+
+        if fragments_seen == 0:
+            if hdr["msg_tag"] != msg_tag or hdr["tag_owner"] != 0:
+                drains += 1
+                if drains > max_drain:
+                    raise AssertionError(
+                        f"never saw a fragment matching msg_tag={msg_tag} after "
+                        f"{max_drain} discarded stale captures"
+                    )
+                print(f"discarding stale/mismatched fragment (msg_tag={hdr['msg_tag']}); "
+                      f"still listening...")
+                continue
+            if not hdr["som"]:
+                raise AssertionError(f"first captured fragment matching our msg_tag isn't SOM: {hdr}")
+            dest_eid, src_eid = hdr["dest_eid"], hdr["src_eid"]
+        else:
+            if hdr["msg_tag"] != msg_tag:
+                raise AssertionError(
+                    f"fragment {fragments_seen + 1} has msg_tag={hdr['msg_tag']}, expected "
+                    f"{msg_tag} -- looks like two different messages' fragments got interleaved"
+                )
+
+        body += chunk
+        fragments_seen += 1
+        if hdr["eom"]:
+            break
+    else:
+        raise AssertionError(f"never saw EOM after {max_fragments} fragments (msg_tag={msg_tag})")
+
+    print(f"reassembled {fragments_seen} fragment(s) into a {len(body)}-byte body")
+    # Reconstruct a single-packet-shaped payload (a fresh som=1/eom=1
+    # transport header + the fully reassembled body) so mctp.
+    # parse_control_response() -- which only understands one packet's
+    # worth of framing -- can decode it without needing its own
+    # multi-packet awareness.
+    synthetic_header = mctp.build_transport_header(
+        dest_eid, src_eid, msg_tag=msg_tag, tag_owner=0, som=1, eom=1, pkt_seq=0
+    )
+    decoded = mctp.parse_control_response(synthetic_header + bytes(body))
+    if decoded["cmd"] != cmd or decoded["inst_id"] != inst_id:
+        raise AssertionError(
+            f"reassembled response doesn't match our request (cmd=0x{decoded['cmd']:02x} "
+            f"inst_id={decoded['inst_id']}, expected cmd=0x{cmd:02x} inst_id={inst_id})"
+        )
+    return decoded
+
+
 def not_implemented(reason):
     """Mark a test as expected to fail because this OpenBIC port doesn't
     implement the command/behavior it exercises yet -- identical
