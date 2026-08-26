@@ -254,6 +254,55 @@ def build_control_request(dest_eid, src_eid, cmd, data=b"", inst_id=0, msg_tag=0
     return transport + bytes([msg_type_ic_byte, rq_d_inst_byte, cmd]) + bytes(data)
 
 
+# Confirmed against source with the peer session, 2026-08-25:
+# MCTP_DEFAULT_MSG_MAX_SIZE in this platform's mctp.c is 244 bytes, used
+# directly for TX-side packetization -- NOT the DSP0236 64-byte baseline
+# MTU this module originally assumed before confirming. There's no
+# runtime MTU negotiation on this implementation at all; it's a
+# compile-time constant both ends have to agree on out-of-band. To force
+# real multi-packet fragmentation against this platform, a message body
+# needs to exceed this, not 64 bytes.
+MTU = 244
+
+# Total reassembled-message size cap (MSG_ASSEMBLY_BUF_SIZE), confirmed
+# against source: mctp_pkt_assembling() explicitly checks against this
+# and cleanly rejects (frees the buffer, doesn't leak) anything larger.
+MAX_REASSEMBLED_SIZE = 1024
+
+
+def fragment_control_request(dest_eid, src_eid, cmd, data=b"", inst_id=0, msg_tag=0, mtu=MTU):
+    """Like build_control_request(), but splits the message across
+    multiple MCTP packets if the message body (control header + data)
+    exceeds `mtu` bytes, exactly the way a real MCTP sender has to.
+
+    Returns a LIST of complete packets (transport header + that packet's
+    slice of the message body each), each of which is meant to be sent
+    as its own separate wire transaction (wrapped + PEC'd individually
+    via bridge.smbus_write(), in order) -- unlike build_control_request(),
+    which returns a single, already-complete packet.
+
+    Packet framing per packet i (0-indexed): som=1 only on packet 0,
+    eom=1 only on the last packet, pkt_seq=i mod 4 (a real 2-bit field,
+    confirmed to wrap this way per DSP0236), same msg_tag across every
+    packet in the message (that's what ties them together as one
+    message during reassembly on the receiving end).
+    """
+    msg_type_ic_byte = MSG_TYPE_CONTROL & 0x7F  # ic=0
+    rq_d_inst_byte = (1 << 7) | (0 << 6) | (inst_id & 0x1F)  # rq=1, d=0
+    message_body = bytes([msg_type_ic_byte, rq_d_inst_byte, cmd]) + bytes(data)
+
+    chunks = [message_body[i:i + mtu] for i in range(0, len(message_body), mtu)] or [b""]
+    packets = []
+    for i, chunk in enumerate(chunks):
+        som = 1 if i == 0 else 0
+        eom = 1 if i == len(chunks) - 1 else 0
+        transport = build_transport_header(
+            dest_eid, src_eid, msg_tag=msg_tag, tag_owner=1, som=som, eom=eom, pkt_seq=i % 4
+        )
+        packets.append(transport + chunk)
+    return packets
+
+
 def parse_control_response(payload):
     """Parse a captured MCTP Control Protocol response (transport header
     + control header + completion code + data). Does NOT verify PEC --
