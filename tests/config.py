@@ -50,9 +50,11 @@ OUR_EID = 0x08
 EXPECTED_EID_TYPE_ON_THIS_PLATFORM = 1  # mctp.EID_TYPE_STATIC
 EXPECTED_ENDPOINT_TYPE_ON_THIS_PLATFORM = 1  # mctp.ENDPOINT_TYPE_BRIDGE
 
-# Confirmed against source with the peer session, 2026-08-25: this
-# platform's dispatch genuinely handles both MCTP Control and PLDM, and
-# load_mctp_support_types() (previously an unimplemented __weak default
-# returning a bare error -- a real gap, not a design choice) now reports
-# both. Same "reasoned through the code, not wire-verified" caveat.
-EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM = (0x00, 0x01)  # Control, PLDM
+# Confirmed live, 2026-08-25: this platform's dispatch handles MCTP
+# Control, PLDM, and (once the peer session added the Vendor-PCI test
+# echo command) Vendor Defined-PCI (0x7E) -- load_mctp_support_types()
+# now reports all three. Updated from an earlier (0x00, 0x01)-only
+# version once the echo command's addition changed this platform's
+# real, live-observed message type list -- not a guess, an actual
+# wire-confirmed change following a real feature addition.
+EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM = (0x00, 0x01, 0x7E)  # Control, PLDM, Vendor-PCI

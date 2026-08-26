@@ -316,6 +316,73 @@ def fragment_control_request(dest_eid, src_eid, cmd, data=b"", inst_id=0, msg_ta
     return packets
 
 
+# Vendor Defined-PCI (message type 0x7E) test-only ECHO command, added
+# by the peer session specifically to exercise reverse-direction (target
+# -> host) fragmentation: nothing else this platform implements produces
+# a naturally large enough reply to force it. NOT a real PCI vendor
+# command -- vendor_id 0xFFFF is a fixed marker distinguishing this test
+# harness's use of the message type, per the peer session, 2026-08-25.
+MSG_TYPE_VENDOR_DEFINED_PCI = 0x7E
+VENDOR_PCI_TEST_ID = 0xFFFF
+VENDOR_PCI_CMD_ECHO = 0x01
+VENDOR_PCI_STATUS_OK = 0x00
+VENDOR_PCI_STATUS_CAPPED = 0x01
+VENDOR_PCI_MAX_LEN = 512
+
+
+def build_vendor_pci_echo_request(dest_eid, src_eid, req_len, msg_tag=0):
+    """Build a Vendor Defined-PCI ECHO request (always fits in a single
+    packet -- the request body is only 6 bytes, well under any MTU this
+    project uses): [msg-type/IC=0x7E][vendor_id_hi=0xFF][vendor_id_lo=0xFF]
+    [cmd=0x01][len_hi][len_lo] (len is the requested reply length,
+    big-endian). It's the REPLY that can be large enough to force
+    fragmentation, not this request.
+
+    req_len is capped at VENDOR_PCI_MAX_LEN server-side (a request over
+    the cap still gets a reply, just capped-length with
+    VENDOR_PCI_STATUS_CAPPED) -- this function doesn't enforce that cap
+    itself, so a caller can deliberately request more than the cap to
+    exercise that path.
+    """
+    msg_type_ic_byte = MSG_TYPE_VENDOR_DEFINED_PCI & 0x7F  # ic=0
+    vendor_hi = (VENDOR_PCI_TEST_ID >> 8) & 0xFF
+    vendor_lo = VENDOR_PCI_TEST_ID & 0xFF
+    len_hi = (req_len >> 8) & 0xFF
+    len_lo = req_len & 0xFF
+    message_body = bytes([msg_type_ic_byte, vendor_hi, vendor_lo, VENDOR_PCI_CMD_ECHO, len_hi, len_lo])
+    transport = build_transport_header(dest_eid, src_eid, msg_tag=msg_tag, tag_owner=1, som=1, eom=1, pkt_seq=0)
+    return transport + message_body
+
+
+def parse_vendor_pci_echo_response(body):
+    """Decode a reassembled Vendor Defined-PCI ECHO response body (the
+    bytes starting from the msg-type/IC byte onward -- i.e. what
+    mctp_helpers.reassemble_response_body() returns, NOT including the
+    transport header):
+    [0x7E][vendor_id_hi][vendor_id_lo][cmd][status][data...].
+
+    Per the peer session: data[i] == i & 0xFF, a fixed, checkable
+    pattern meant specifically for verifying byte-for-byte correctness
+    of a reassembled body, not just its length -- callers should check
+    that, not just len(data).
+
+    Raises ValueError if too short, or the msg-type/vendor/cmd fields
+    don't match what this echo command is defined to return.
+    """
+    if len(body) < 5:
+        raise ValueError(f"too short for a Vendor-PCI echo response: {len(body)} bytes")
+    msg_type_ic, vendor_hi, vendor_lo, cmd, status = body[:5]
+    msg_type = msg_type_ic & 0x7F
+    if msg_type != MSG_TYPE_VENDOR_DEFINED_PCI:
+        raise ValueError(f"expected msg_type 0x{MSG_TYPE_VENDOR_DEFINED_PCI:02x}, got 0x{msg_type:02x}")
+    vendor_id = (vendor_hi << 8) | vendor_lo
+    if vendor_id != VENDOR_PCI_TEST_ID:
+        raise ValueError(f"expected vendor_id 0x{VENDOR_PCI_TEST_ID:04x}, got 0x{vendor_id:04x}")
+    if cmd != VENDOR_PCI_CMD_ECHO:
+        raise ValueError(f"expected cmd 0x{VENDOR_PCI_CMD_ECHO:02x}, got 0x{cmd:02x}")
+    return {"status": status, "data": bytes(body[5:])}
+
+
 def parse_control_response(payload):
     """Parse a captured MCTP Control Protocol response (transport header
     + control header + completion code + data). Does NOT verify PEC --

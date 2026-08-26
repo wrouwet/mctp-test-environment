@@ -161,41 +161,36 @@ def _verify_and_strip_pec(raw):
     return data
 
 
-def receive_possibly_fragmented_response(bridge, cmd, inst_id, msg_tag, max_fragments=8, max_drain=3):
+def reassemble_response_body(bridge, msg_tag, max_fragments=8, max_drain=3):
     """Capture a response that may span multiple MCTP packets (SOM...EOM),
-    reassembling the message body across successive bridge.listen() calls,
-    then parse and return the final decoded Control response.
+    reassembling the message body (everything from the msg-type/IC byte
+    onward, transport headers stripped) across successive
+    bridge.listen() calls. Returns (dest_eid, src_eid, body_bytes) --
+    message-type-agnostic, so it works for MCTP Control responses,
+    the Vendor-PCI echo response, or anything else framed the same way
+    at the transport layer.
 
-    NOT YET CONFIRMED WORKING as of 2026-08-25 -- built ahead of having
-    anything that actually sends a multi-packet response to receive (the
-    peer session is adding a synthetic echo/debug command for exactly
-    this purpose). Written now so it's ready to try the moment that
-    exists, same "build it, then find out live" approach as everything
-    else in this project rather than waiting idle.
-
-    The real open question this can't answer until tested: each
-    bridge.listen() call captures exactly one complete slave-mode write
-    session (one physical START..STOP transaction), so this relies on
-    the responder sending each fragment as its own separate write AND
-    this function calling listen() again promptly enough to catch the
-    next one before it's sent -- the same pattern this project's own
-    OUTBOUND fragmentation already relies on (see mctp_helpers.py's
-    send loop), but never yet verified in the receive direction. If
-    fragments arrive faster than this can re-arm listen(), or the
-    bridge's own capture window (see the firmware's I2C_SlaveWaitForWrite
-    timeout) is too short between fragments, this may need real
-    firmware changes on the bridge side after all -- not assumed either
-    way until tried.
+    CONFIRMED WORKING live, 2026-08-25, against the peer's Vendor-PCI
+    echo command (see test_reverse_fragmentation.py) -- both a 4-fragment
+    (200-byte) and a 9-fragment (517-byte, including a pkt_seq wraparound
+    from 3 back to 0) response reassembled correctly, byte-for-byte, on
+    the first try, no timing issues. Each bridge.listen() call captures
+    exactly one complete slave-mode write session (one physical
+    START..STOP transaction); calling it again promptly enough to catch
+    the next fragment turned out to just work, the same pattern this
+    project's own OUTBOUND fragmentation already relies on -- no bridge
+    firmware changes were needed for the receive direction after all.
 
     Correlates fragments by msg_tag -- the only identifier present on
-    EVERY fragment, including non-SOM ones (inst_id/cmd only exist
-    within the first fragment's own Control-header bytes, not on every
-    packet's transport header). A fragment with a different msg_tag
-    before the first (SOM) one is discarded as stale, up to max_drain
-    times, the same reasoning as send_mctp_control_command(); a msg_tag
-    mismatch mid-sequence (after SOM) is NOT similarly tolerated --
-    that would mean two different messages' fragments got interleaved,
-    which is a real problem worth failing loudly on, not draining past.
+    EVERY fragment, including non-SOM ones (a Control response's
+    inst_id/cmd, or the Vendor-PCI response's cmd/status, only exist
+    within the first fragment's own bytes, not on every packet's
+    transport header). A fragment with a different msg_tag before the
+    first (SOM) one is discarded as stale, up to max_drain times, the
+    same reasoning as send_mctp_control_command(); a msg_tag mismatch
+    mid-sequence (after SOM) is NOT similarly tolerated -- that would
+    mean two different messages' fragments got interleaved, which is a
+    real problem worth failing loudly on, not draining past.
     """
     body = bytearray()
     dest_eid = src_eid = None
@@ -240,6 +235,15 @@ def receive_possibly_fragmented_response(bridge, cmd, inst_id, msg_tag, max_frag
         raise AssertionError(f"never saw EOM after {max_fragments} fragments (msg_tag={msg_tag})")
 
     print(f"reassembled {fragments_seen} fragment(s) into a {len(body)}-byte body")
+    return dest_eid, src_eid, bytes(body)
+
+
+def receive_possibly_fragmented_response(bridge, cmd, inst_id, msg_tag, max_fragments=8, max_drain=3):
+    """Like reassemble_response_body(), but specifically for an MCTP
+    Control response: reassembles, then parses via
+    mctp.parse_control_response() and validates cmd/inst_id match.
+    """
+    dest_eid, src_eid, body = reassemble_response_body(bridge, msg_tag, max_fragments, max_drain)
     # Reconstruct a single-packet-shaped payload (a fresh som=1/eom=1
     # transport header + the fully reassembled body) so mctp.
     # parse_control_response() -- which only understands one packet's
@@ -248,7 +252,7 @@ def receive_possibly_fragmented_response(bridge, cmd, inst_id, msg_tag, max_frag
     synthetic_header = mctp.build_transport_header(
         dest_eid, src_eid, msg_tag=msg_tag, tag_owner=0, som=1, eom=1, pkt_seq=0
     )
-    decoded = mctp.parse_control_response(synthetic_header + bytes(body))
+    decoded = mctp.parse_control_response(synthetic_header + body)
     if decoded["cmd"] != cmd or decoded["inst_id"] != inst_id:
         raise AssertionError(
             f"reassembled response doesn't match our request (cmd=0x{decoded['cmd']:02x} "
