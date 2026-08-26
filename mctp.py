@@ -49,13 +49,20 @@ MSG_TYPE_CONTROL = 0x00
 MSG_TYPE_PLDM = 0x01  # not otherwise used in this MCTP-only project
 
 # MCTP Control Protocol command codes (DSP0236), the subset this project
-# actually exercises. Confirmed against source that OpenBIC's dispatch
-# recognizes these particular commands.
+# actually exercises. CTRL_CMD_SET_ENDPOINT_ID/GET_ENDPOINT_ID/
+# GET_MESSAGE_TYPE_SUPPORT are confirmed implemented on this OpenBIC
+# port; CTRL_CMD_GET_MCTP_VERSION_SUPPORT is confirmed NOT implemented
+# (see test_mctp_control.py); CTRL_CMD_GET_ENDPOINT_UUID and
+# CTRL_CMD_RESOLVE_ENDPOINT_ID are here to test against the same
+# confirmed-empty dispatch table (see test_mctp_control.py) -- their
+# command code VALUES are per DSP0236, independent of what this
+# platform actually implements.
 CTRL_CMD_SET_ENDPOINT_ID = 0x01
 CTRL_CMD_GET_ENDPOINT_ID = 0x02
 CTRL_CMD_GET_ENDPOINT_UUID = 0x03
 CTRL_CMD_GET_MCTP_VERSION_SUPPORT = 0x04
 CTRL_CMD_GET_MESSAGE_TYPE_SUPPORT = 0x05
+CTRL_CMD_RESOLVE_ENDPOINT_ID = 0x07
 
 # MCTP Control Protocol completion codes (DSP0236).
 CTRL_CC_SUCCESS = 0x00

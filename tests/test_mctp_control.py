@@ -1,19 +1,12 @@
 """MCTP Control Protocol commands (DSP0236).
 
-NOT yet run against real hardware -- see config.py's module docstring
-for the full status note. These tests are built from confirmed header
-layouts (see mctp.py) and the confirmed target EID/address, but the
-actual round trip against real silicon is unverified until the second
-I2C bus is physically wired up.
-
-Assertions are deliberately conservative where this project doesn't
-have a source-confirmed exact response body layout (e.g. the endpoint-
-type byte in Get Endpoint ID's response, or the exact bit-packing of
-Get Message Type Support's supported-types list) -- asserting a
-completion code and printing the rest for visibility, rather than
-guessing at bit-level response structure the way this project's sibling
-got burned doing for IPMI once. Tighten these once real responses are
-observed.
+Hardware-verified as of 2026-08-25 (see README's "Current status") --
+this file's tests run against the real OpenBIC MCTP endpoint over a
+physically wired second I2C bus. Assertions are deliberately
+conservative where this project doesn't have a source-confirmed exact
+response body layout -- asserting a completion code and printing the
+rest for visibility, rather than guessing at bit-level response
+structure the way this project's sibling got burned doing for IPMI once.
 """
 
 import mctp
@@ -27,8 +20,10 @@ from config import (
 from mctp import (
     CTRL_CC_SUCCESS,
     CTRL_CMD_GET_ENDPOINT_ID,
+    CTRL_CMD_GET_ENDPOINT_UUID,
     CTRL_CMD_GET_MESSAGE_TYPE_SUPPORT,
     CTRL_CMD_GET_MCTP_VERSION_SUPPORT,
+    CTRL_CMD_RESOLVE_ENDPOINT_ID,
     CTRL_CMD_SET_ENDPOINT_ID,
 )
 
@@ -63,24 +58,27 @@ def test_get_endpoint_id(bridge):
     print(f"full response data: {decoded['data'].hex(' ')}")
 
 
-@mctp_helpers.not_implemented(
-    "Get MCTP Version Support isn't in mctp_ctrl_cmd_tbl[] at all (confirmed "
-    "against source with the peer session, 2026-08-25, after first observing "
-    "ERROR_UNSUPPORTED_CMD live against real hardware): common/service/mctp/"
-    "mctp_ctrl.c's shared dispatch table only has 3 entries (Set/Get Endpoint "
-    "ID, Get Message Type Support), no MCTP_CTRL_CMD_GET_VERSION_SUPPORT "
-    "anywhere, so the dispatch loop's fallthrough always returns "
-    "MCTP_CTRL_CC_ERROR_UNSUPPORTED_CMD (0x05) for cmd 0x04 -- regardless of "
-    "selector byte, and the same on every OpenBIC board on mainline (this is "
-    "shared, not board-specific, code). A real, not-yet-built feature, not a "
-    "quick board-hook wire-up like Get Endpoint ID's endpoint-type byte or Get "
-    "Message Type Support were."
-)
 def test_get_mctp_version_support(bridge):
     """Get MCTP Version Support (cmd 0x04), querying the base MCTP spec
     version (message type selector 0xFF, the DSP0236 convention for "the
     base spec itself" rather than a specific message type's version).
     Every MCTP endpoint must support this for at least the base spec.
+
+    Previously a confirmed real gap on this platform (not in OpenBIC's
+    shared MCTP Control dispatch table at all, always returned
+    ERROR_UNSUPPORTED_CMD) -- caught turning back into a real, passing
+    test exactly the way this suite's not_implemented() mechanism is
+    meant to: this test flipped to a failing XPASS the moment the peer
+    session implemented it for real, forcing this update rather than
+    silently staying green under a now-stale xfail. Observed live,
+    2026-08-25: completion_code SUCCESS, data `01 f1 f3 ff 00` --
+    consistent with DSP0236's version-entry encoding (a count byte, 1,
+    followed by one 4-byte BCD-ish version entry) for something in the
+    neighborhood of "MCTP Base Specification 1.3.x", though the exact
+    nibble-level meaning of every byte isn't independently confirmed
+    here -- printed for visibility rather than asserted byte-for-byte,
+    same conservative-response-body-structure approach used elsewhere
+    in this file.
     """
     decoded = mctp_helpers.send_mctp_control_command(
         bridge, CTRL_CMD_GET_MCTP_VERSION_SUPPORT, data=bytes([0xFF])
@@ -115,6 +113,40 @@ def test_get_message_type_support(bridge):
         f"expected exactly {[hex(t) for t in EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM]}, "
         f"got {[hex(t) for t in types]}"
     )
+
+
+@mctp_helpers.not_implemented(
+    "Get Endpoint UUID isn't in mctp_ctrl_cmd_tbl[] either -- same shared dispatch "
+    "table gap as Get MCTP Version Support (see that test), confirmed against "
+    "source: only 3 commands are wired in (Set/Get Endpoint ID, Get Message Type "
+    "Support), so any other command code falls through to ERROR_UNSUPPORTED_CMD "
+    "(0x05) regardless of what's sent."
+)
+def test_get_endpoint_uuid(bridge):
+    """Get Endpoint UUID (cmd 0x03). Optional per DSP0236, but this
+    platform doesn't even have a stub for it -- it hits the same
+    generic dispatch-table fallthrough as any other unimplemented
+    command, not a specific "optional, not supported" completion code."""
+    decoded = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_ENDPOINT_UUID)
+    assert decoded["completion_code"] == CTRL_CC_SUCCESS
+
+
+@mctp_helpers.not_implemented(
+    "Resolve Endpoint ID isn't in mctp_ctrl_cmd_tbl[] either -- same shared "
+    "dispatch table gap as Get MCTP Version Support/Get Endpoint UUID (see those "
+    "tests). Expected: this platform has no downstream routing at all (single "
+    "local endpoint, per the peer session's platform inventory), so Resolve "
+    "Endpoint ID wouldn't have anything meaningful to do here even if it were "
+    "wired up -- but the actual observed failure mode is the generic dispatch "
+    "fallthrough (0x05), not a routing-specific rejection, so that's what this "
+    "documents rather than assuming."
+)
+def test_resolve_endpoint_id(bridge):
+    """Resolve Endpoint ID (cmd 0x07)."""
+    decoded = mctp_helpers.send_mctp_control_command(
+        bridge, CTRL_CMD_RESOLVE_ENDPOINT_ID, data=bytes([TARGET_EID])
+    )
+    assert decoded["completion_code"] == CTRL_CC_SUCCESS
 
 
 def test_set_endpoint_id_idempotent(bridge):

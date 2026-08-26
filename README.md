@@ -13,45 +13,68 @@ and the MCTP Control Protocol. No PLDM or other higher-layer message
 type is tested here; that would be a different project built on top of
 this one's foundation, not an extension of it.
 
-## Current status: hardware-verified as of 2026-08-25 (5/6 real, 1 open question)
+## Current status: hardware-verified as of 2026-08-25 (7/9 real, 2 confirmed gaps)
 
 This repo's first draft was built entirely *before* the physical I2C
 bus it needs was wired up, at the user's explicit direction -- see git
 history if you want the details of that phase. **That phase is over.**
-The bus is now wired (`flexcomm3_lpi2c3`, see "What you need" below) and
-the suite has run against real hardware for the first time.
+The bus is now wired (`flexcomm3_lpi2c3`, see "What you need" below),
+and this project and the peer session developing the OpenBIC firmware
+are now in the same live, iterative rhythm the sibling
+openbic-test-environment project settled into: they develop real MCTP
+features, this suite develops real test coverage, neither blocking on
+the other, looping back whenever something needs confirming.
 
-Result: **first contact found a real, non-obvious bug**, exactly as
-this README used to warn it would -- the initial frame-building code
-was missing DSP0237's 3-byte SMBus block-write wrapper
+First contact found a real, non-obvious bug, exactly as this README
+used to warn it would -- the initial frame-building code was missing
+DSP0237's 3-byte SMBus block-write wrapper
 (`mctp.build_smbus_block_wrapper()`) that has to precede the MCTP
 transport header on every single frame. Without it, OpenBIC's
 `mctp_smbus_read()` silently discarded every request before MCTP-level
 parsing ever ran -- no log output at all, which is why "the write
 succeeds but nothing ever comes back" was the only symptom visible from
 this side; finding the actual cause took reading the target's console
-log on the peer's side. Once added, 5 of 6 tests started passing with
-genuine, real, bidirectional MCTP traffic:
+log on the peer's side. Once added, real bidirectional MCTP traffic
+started working, and the suite has grown since:
 
 - Get Endpoint ID: reports EID 0x09, endpoint-type byte 0x11 (STATIC/
   BRIDGE) -- exactly the values source-confirmed with the peer session,
   now also wire-confirmed.
 - Get Message Type Support: reports {Control, PLDM} -- also matches
   the source-confirmed implementation, now wire-confirmed.
+- Get MCTP Version Support: genuinely working now -- see below, this is
+  the not_implemented() mechanism's first real catch in this project.
 - Set Endpoint ID: round-trips successfully.
-- The PEC-corruption framing test passes as designed.
+- Every response's transport-layer msg_tag/tag_owner echo is now
+  asserted (not just the Control-layer inst_id match), confirming the
+  target correctly threads tags through per DSP0236 -- see
+  `mctp_helpers.send_mctp_control_command()`.
+- The PEC-corruption framing test, and a back-to-back queue-behavior
+  probe (mirroring the sibling IPMB project's queue-depth finding),
+  both pass -- the latter found the same "not first-come-first-served"
+  shape of result IPMB did, on a different transport/code path, not yet
+  root-caused from source.
 
-**One real, confirmed gap**: Get MCTP Version Support (cmd 0x04) isn't
-in OpenBIC's shared MCTP Control dispatch table at all (confirmed
-against source with the peer session) -- the dispatch loop's fallthrough
-always returns `ERROR_UNSUPPORTED_CMD` for this command, regardless of
-what selector byte is sent, on every OpenBIC board on mainline. Not a
-framing bug (the response is well-formed) and not fixable by trying a
-different request. Marked `not_implemented()`; see that test's docstring
-in `tests/test_mctp_control.py` for the full trace.
+**not_implemented() caught a real feature landing, live**: Get MCTP
+Version Support was a confirmed gap (not in OpenBIC's shared MCTP
+Control dispatch table at all) when this suite was first written against
+real hardware. While this suite was being extended further, the peer
+session implemented it for real -- and the very next run turned that
+test's `xfail` into a failing `XPASS(strict)`, exactly the loud signal
+this mechanism exists to produce. The test has been updated to assert
+the real (now genuinely passing) behavior instead.
+
+**Two confirmed gaps remain**, both the same shape as the one above and
+found the same way (no guessing, no assuming IPMB's dispatch-table
+answer carries over -- confirmed for MCTP specifically): Get Endpoint
+UUID and Resolve Endpoint ID aren't in the dispatch table either, so
+both always return `ERROR_UNSUPPORTED_CMD` regardless of what's sent.
+Marked `not_implemented()`; see their docstrings in
+`tests/test_mctp_control.py`.
 
 What's still NOT verified, going forward: response body formats beyond
-what's been directly observed above, behavior of any command not yet
+what's been directly observed above (e.g. Get MCTP Version Support's
+exact version-entry nibble encoding), behavior of any command not yet
 exercised, and everything about fragmentation/multi-packet messages
 (this suite only sends single-packet, unfragmented requests so far).
 Treat every new test added here the same way this repo's first real run
