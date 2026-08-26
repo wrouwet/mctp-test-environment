@@ -121,20 +121,30 @@ def test_get_message_type_support(bridge):
     )
 
 
-@mctp_helpers.not_implemented(
-    "Get Endpoint UUID isn't in mctp_ctrl_cmd_tbl[] either -- same shared dispatch "
-    "table gap as Get MCTP Version Support (see that test), confirmed against "
-    "source: only 3 commands are wired in (Set/Get Endpoint ID, Get Message Type "
-    "Support), so any other command code falls through to ERROR_UNSUPPORTED_CMD "
-    "(0x05) regardless of what's sent."
-)
 def test_get_endpoint_uuid(bridge):
-    """Get Endpoint UUID (cmd 0x03). Optional per DSP0236, but this
-    platform doesn't even have a stub for it -- it hits the same
-    generic dispatch-table fallthrough as any other unimplemented
-    command, not a specific "optional, not supported" completion code."""
-    decoded = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_ENDPOINT_UUID)
-    assert decoded["completion_code"] == CTRL_CC_SUCCESS
+    """Get Endpoint UUID (cmd 0x03). Optional per DSP0236.
+
+    Another confirmed-gap-turned-XPASS catch, same mechanism as Get
+    MCTP Version Support: this was a documented "not in
+    mctp_ctrl_cmd_tbl[]" gap until the peer session implemented it for
+    real. Observed live, 2026-08-25: completion_code SUCCESS, a 16-byte
+    UUID (`36 35 36 30 00 4d 44 31 00 00 00 10 00 29 00 04`). A UUID's
+    only real contract is "16 bytes, unique to this endpoint, stable
+    across calls" -- not a bitfield to decode -- so this asserts exactly
+    that (length + success) rather than any specific byte values, and
+    additionally checks it's the same UUID on a second call (an
+    endpoint's UUID shouldn't change from one request to the next).
+    """
+    decoded1 = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_ENDPOINT_UUID)
+    assert decoded1["completion_code"] == CTRL_CC_SUCCESS
+    assert len(decoded1["data"]) == 16, f"expected a 16-byte UUID, got {decoded1['data'].hex(' ')}"
+    print(f"UUID: {decoded1['data'].hex(' ')}")
+
+    decoded2 = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_ENDPOINT_UUID)
+    assert decoded2["data"] == decoded1["data"], (
+        f"UUID changed between two calls: {decoded1['data'].hex(' ')} vs "
+        f"{decoded2['data'].hex(' ')} -- should be stable for a given endpoint"
+    )
 
 
 @mctp_helpers.not_implemented(

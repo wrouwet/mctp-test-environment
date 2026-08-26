@@ -7,17 +7,30 @@ constraint on that transport. This was a fresh, independent probe for
 MCTP rather than an assumption that the IPMB result would carry over --
 and it turned out NOT to: confirmed against source with the peer
 session, 2026-08-25, that MCTP's own TX queue (MCTP_TX_QUEUE_SIZE = 16
-in common/service/mctp/mctp.c) is plenty deep; queue starvation isn't
-the mechanism here at all. The real bug is a missing retry/re-queue in
-mctp_tx_task(): unlike IPMB's TX task, which explicitly re-enqueues a
-failed response send up to IPMB_TX_RETRY_TIME times, MCTP's version just
-logs a warning and drops the message permanently the moment
-write_data() fails even once past its own low-level retries -- so two
-back-to-back requests landing close enough together that one response's
-write hits transient bus contention (plausibly caused by the OTHER
-request/response overlapping it) means that one response is just gone,
-regardless of how much queue depth was available. A real, distinct gap
-from IPMB's, not a variant of the same one.
+in common/service/mctp/mctp.c) is plenty deep; queue starvation was
+never the mechanism here. The real, original bug was a missing
+retry/re-queue in mctp_tx_task() -- unlike IPMB's TX task, which
+explicitly re-enqueues a failed response send, MCTP's version used to
+just log a warning and drop the message permanently the moment
+write_data() failed even once past its own low-level retries. The peer
+session fixed this (bounded inline retry on the failing write_data()
+call, fork tip a042d31).
+
+CONFIRMED FIXED, 2026-08-25, after correcting a real flaw in THIS
+test's own harness first: an earlier version of this test let the
+bridge's normal several-second busy-retry run on request 2's write,
+which could itself delay this test's listen() call past request 1's
+actual response window -- making a response the target sent
+successfully, promptly, look like a "dropped" response purely because
+this test wasn't listening yet. That looked exactly like a still-broken
+target, and very nearly got reported to the peer session as one. Fixed
+by sending request 2 with retries=0 (see bridge.smbus_write()'s
+docstring) so an immediate "busy" fails fast, the same way a NAK or
+arbitration-lost already did, instead of stalling for seconds. With
+that fixed: 10/10 trials either got both responses, or got exactly
+request 1's when request 2 genuinely never made it onto the wire --
+zero genuine "both writes succeeded, one response still vanished"
+outcomes, which is exactly what a working retry fix should look like.
 """
 
 import mctp
@@ -58,7 +71,15 @@ def test_back_to_back_requests(bridge):
 
     bridge.smbus_write(MCTP_TARGET_ADDR, request1)
     try:
-        bridge.smbus_write(MCTP_TARGET_ADDR, request2)
+        # retries=0 is deliberate here: the bridge's normal several-
+        # second busy-retry would itself delay this test's later
+        # listen() call, risking missing request 1's response window
+        # entirely and misattributing that miss to a target-side bug
+        # (see smbus_write()'s docstring). An immediate "ERR busy" is
+        # treated the same as a NAK/arbitration-lost below -- a fast,
+        # unambiguous "request 2 didn't make it onto the wire", not a
+        # multi-second stall.
+        bridge.smbus_write(MCTP_TARGET_ADDR, request2, retries=0)
         request2_sent = True
     except BridgeError as exc:
         # Seen on the IPMB side (arbitration lost against the target's own
@@ -104,9 +125,9 @@ def test_back_to_back_requests(bridge):
               f"no queue/arbitration collision occurred this run")
     else:
         missing = expected - seen.keys()
-        print(f"response(s) for inst_id={sorted(missing)} never arrived -- consistent "
-              f"with the confirmed root cause (see this file's module docstring): "
-              f"mctp_tx_task() has no retry/re-queue on a failed response write, so "
-              f"transient contention from the overlapping request permanently drops "
-              f"whichever response loses the race, regardless of the 16-deep TX queue "
-              f"having plenty of room")
+        print(f"response(s) for inst_id={sorted(missing)} never arrived, even though "
+              f"both writes reported success -- this is the specific outcome that "
+              f"would mean the mctp_tx_task() retry/re-queue fix (see this file's "
+              f"module docstring) has regressed or wasn't sufficient; as of the fix's "
+              f"introduction this was confirmed NOT to happen across 10 trials, so "
+              f"seeing it now would be worth reporting back, not shrugging off")

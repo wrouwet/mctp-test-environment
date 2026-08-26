@@ -278,14 +278,27 @@ class I2CBridge:
                                 f"write_read to 0x{addr:02x} failed")
         return bytes(int(x, 16) for x in parts)
 
-    def smbus_write(self, addr, data):
+    def smbus_write(self, addr, data, retries=BUSY_RETRIES):
         """SMBus write: like write(), but the bridge computes and appends a
         correct PEC (Packet Error Check, CRC-8) byte after `data`
         automatically -- see the bridge firmware's "SMBus (PEC) support"
-        README section for exactly what the CRC covers."""
+        README section for exactly what the CRC covers.
+
+        `retries` defaults to the normal BUSY_RETRIES behavior, but can
+        be overridden -- in particular, retries=0 makes an immediate
+        "ERR busy" raise right away instead of silently retrying for up
+        to several seconds. That matters for tests deliberately racing
+        two closely-timed writes against each other (see
+        test_queue_behavior.py): the normal multi-second busy-retry
+        delay can itself cause a *different* request's response to be
+        missed (arriving and going uncaptured while this call is still
+        blocked retrying), which would masquerade as a target-side
+        "dropped response" bug that's actually just this client's own
+        retry timing getting in the way.
+        """
         payload = " ".join(f"{b:02x}" for b in data)
         cmd = f"WS {addr:02x} {payload}".strip()
-        reply = self._command(cmd)
+        reply = self._command(cmd, retries=retries)
         if reply != "OK":
             raise BridgeError(f"SMBus write to 0x{addr:02x} failed: {reply}")
 
