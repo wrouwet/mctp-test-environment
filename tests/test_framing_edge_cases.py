@@ -35,15 +35,19 @@ def test_corrupted_pec_does_not_produce_a_matching_response(bridge):
     and processed as if it were valid.
     """
     inst_id = mctp_helpers.next_inst_id()
-    request = bytearray(
-        mctp.build_control_request(
-            dest_eid=TARGET_EID, src_eid=OUR_EID, cmd=CTRL_CMD_GET_ENDPOINT_ID, inst_id=inst_id
-        )
+    mctp_payload = mctp.build_control_request(
+        dest_eid=TARGET_EID, src_eid=OUR_EID, cmd=CTRL_CMD_GET_ENDPOINT_ID, inst_id=inst_id
     )
+    # Must include the DSP0237 SMBus block-write wrapper, same as
+    # send_mctp_control_command() -- otherwise this isn't testing "PEC
+    # corruption", it's just re-triggering the missing-wrapper bug (a
+    # different, already-fixed problem) instead.
+    wrapper = mctp.build_smbus_block_wrapper(OUR_I2C_ADDR, mctp_payload)
+    frame = wrapper + mctp_payload
     correct_pec = mctp.smbus_pec_byte(0, (MCTP_TARGET_ADDR << 1) | 0)
-    correct_pec = mctp.smbus_pec_buf(correct_pec, request)
+    correct_pec = mctp.smbus_pec_buf(correct_pec, frame)
     corrupted_pec = correct_pec ^ 0xFF
-    request = bytes(request) + bytes([corrupted_pec])
+    request = frame + bytes([corrupted_pec])
     print(f"request bytes (deliberately corrupted PEC): {request.hex(' ')}")
 
     try:
@@ -60,11 +64,12 @@ def test_corrupted_pec_does_not_produce_a_matching_response(bridge):
 
     print(f"got a response anyway: {raw.hex(' ')}")
     try:
-        payload = mctp_helpers._verify_and_strip_pec(raw)
-        decoded = mctp.parse_control_response(payload)
+        after_pec = mctp_helpers._verify_and_strip_pec(raw)
+        _, mctp_response = mctp.parse_smbus_block_wrapper(after_pec)
+        decoded = mctp.parse_control_response(mctp_response)
     except ValueError as exc:
-        print(f"response was malformed/failed its own PEC check -- acceptable, not a "
-              f"real answer to our corrupted request: {exc}")
+        print(f"response was malformed/failed its own PEC or wrapper check -- acceptable, "
+              f"not a real answer to our corrupted request: {exc}")
         return
 
     assert not (decoded["cmd"] == CTRL_CMD_GET_ENDPOINT_ID and decoded["inst_id"] == inst_id), (

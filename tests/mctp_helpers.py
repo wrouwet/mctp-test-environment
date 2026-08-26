@@ -46,15 +46,24 @@ def send_mctp_control_command(bridge, cmd, data=b"", max_drain=3):
     unverified until the physical bus is wired up.
     """
     inst_id = next_inst_id()
-    request = mctp.build_control_request(
+    mctp_payload = mctp.build_control_request(
         dest_eid=TARGET_EID,
         src_eid=OUR_EID,
         cmd=cmd,
         data=data,
         inst_id=inst_id,
     )
-    print(f"request bytes: {request.hex(' ')}")
-    # WS: the bridge computes and appends a correct PEC byte automatically.
+    # The MCTP transport header/payload alone is NOT what goes on the
+    # wire -- DSP0237's SMBus block-write wrapper has to precede it (see
+    # mctp.build_smbus_block_wrapper()'s docstring for why: an earlier
+    # version of this function sent the payload without it, and OpenBIC's
+    # mctp_smbus_read() silently discarded every single request as a
+    # result, before MCTP-level parsing ever ran).
+    wrapper = mctp.build_smbus_block_wrapper(OUR_I2C_ADDR, mctp_payload)
+    request = wrapper + mctp_payload
+    print(f"request bytes (wrapper + MCTP payload): {request.hex(' ')}")
+    # WS: the bridge computes and appends a correct PEC byte automatically,
+    # covering the wrapper bytes too since they're part of what's handed to it.
     bridge.smbus_write(MCTP_TARGET_ADDR, request)
 
     for attempt in range(max_drain + 1):
@@ -63,10 +72,21 @@ def send_mctp_control_command(bridge, cmd, data=b"", max_drain=3):
         # raw bytes), so PEC verification for a captured response has to
         # happen here, in Python, not on-device. See _verify_and_strip_pec().
         raw = bridge.listen(OUR_I2C_ADDR)
-        print(f"response bytes (incl. PEC): {raw.hex(' ')}")
-        response = _verify_and_strip_pec(raw)
-        decoded = mctp.parse_control_response(response)
-        print(f"decoded: {decoded}")
+        print(f"response bytes (incl. wrapper + PEC): {raw.hex(' ')}")
+        after_pec = _verify_and_strip_pec(raw)
+        try:
+            resp_src_addr, mctp_response = mctp.parse_smbus_block_wrapper(after_pec)
+        except ValueError as exc:
+            # Same treatment as a stale/mismatched response below: this
+            # captured frame isn't a valid answer to anything, but rather
+            # than hard-failing immediately, keep listening in case a
+            # real response is still coming (mirrors the sibling
+            # project's IPMB drain-loop reasoning).
+            print(f"discarding malformed SMBus wrapper on captured response ({exc}); "
+                  f"still listening...")
+            continue
+        decoded = mctp.parse_control_response(mctp_response)
+        print(f"decoded (from src I2C addr 0x{resp_src_addr:02x}): {decoded}")
         if decoded["cmd"] == cmd and decoded["inst_id"] == inst_id:
             return decoded
         print(f"discarding stale response (cmd=0x{decoded['cmd']:02x} "
@@ -75,7 +95,7 @@ def send_mctp_control_command(bridge, cmd, data=b"", max_drain=3):
 
     raise AssertionError(
         f"never received a response matching our request (cmd=0x{cmd:02x} "
-        f"inst_id={inst_id}) after discarding {max_drain + 1} stale/mismatched ones"
+        f"inst_id={inst_id}) after discarding {max_drain + 1} stale/mismatched/malformed ones"
     )
 
 

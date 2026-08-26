@@ -63,6 +63,19 @@ def test_get_endpoint_id(bridge):
     print(f"full response data: {decoded['data'].hex(' ')}")
 
 
+@mctp_helpers.not_implemented(
+    "Get MCTP Version Support isn't in mctp_ctrl_cmd_tbl[] at all (confirmed "
+    "against source with the peer session, 2026-08-25, after first observing "
+    "ERROR_UNSUPPORTED_CMD live against real hardware): common/service/mctp/"
+    "mctp_ctrl.c's shared dispatch table only has 3 entries (Set/Get Endpoint "
+    "ID, Get Message Type Support), no MCTP_CTRL_CMD_GET_VERSION_SUPPORT "
+    "anywhere, so the dispatch loop's fallthrough always returns "
+    "MCTP_CTRL_CC_ERROR_UNSUPPORTED_CMD (0x05) for cmd 0x04 -- regardless of "
+    "selector byte, and the same on every OpenBIC board on mainline (this is "
+    "shared, not board-specific, code). A real, not-yet-built feature, not a "
+    "quick board-hook wire-up like Get Endpoint ID's endpoint-type byte or Get "
+    "Message Type Support were."
+)
 def test_get_mctp_version_support(bridge):
     """Get MCTP Version Support (cmd 0x04), querying the base MCTP spec
     version (message type selector 0xFF, the DSP0236 convention for "the

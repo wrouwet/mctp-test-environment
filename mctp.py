@@ -32,6 +32,17 @@ environment project's ipmb.py):
                                         its own (see mctp_helpers.py)
 """
 
+# DSP0237 MCTP-over-SMBus block-write wrapper (mirrors smbus_hdr in
+# common/service/mctp/mctp_smbus.c) that precedes the MCTP transport
+# header on EVERY frame in both directions -- confirmed against source
+# with the peer session, 2026-08-25, after an initial version of this
+# module omitted it entirely: the target's mctp_smbus_read() silently
+# discards (zero log output) any frame whose first byte isn't this
+# wrapper's cmd_code, which is exactly what happened. This is real,
+# mandatory framing per the transport binding, not something optional
+# or specific to this platform.
+SMBUS_MCTP_CMD_CODE = 0x0F
+
 MCTP_HDR_VERSION = 0x01
 
 MSG_TYPE_CONTROL = 0x00
@@ -92,6 +103,59 @@ def smbus_pec_buf(crc, data):
     for b in data:
         crc = smbus_pec_byte(crc, b)
     return crc
+
+
+def build_smbus_block_wrapper(src_i2c_addr, mctp_payload):
+    """Build the 3-byte DSP0237 MCTP-over-SMBus block-write wrapper that
+    must precede the MCTP transport header on the wire: [cmd_code=0x0F]
+    [byte_count] [src_addr]. Mirrors `smbus_hdr` in
+    common/service/mctp/mctp_smbus.c.
+
+    byte_count = 1 (for src_addr) + len(mctp_payload), per the standard
+    SMBus Block Write convention (count of bytes following the count
+    byte itself, i.e. src_addr plus the actual MCTP payload). src_addr
+    is the REQUESTER's own 7-bit I2C address, left-shifted by 1 with
+    bit0 set.
+
+    The caller is responsible for concatenating this wrapper's bytes
+    immediately before `mctp_payload` and sending the result as one
+    write (see mctp_helpers.send_mctp_control_command()) -- this
+    function only builds the wrapper itself.
+    """
+    byte_count = (1 + len(mctp_payload)) & 0xFF
+    src_addr_byte = ((src_i2c_addr << 1) | 1) & 0xFF
+    return bytes([SMBUS_MCTP_CMD_CODE, byte_count, src_addr_byte])
+
+
+def parse_smbus_block_wrapper(raw):
+    """Inverse of build_smbus_block_wrapper(): validate and strip the
+    3-byte wrapper from a captured frame. Returns (src_i2c_addr,
+    mctp_payload). Raises ValueError if the wrapper's cmd_code doesn't
+    match or byte_count doesn't match the actual remaining length --
+    the same check OpenBIC's own mctp_smbus_read() does, except that
+    function fails *silently* on the target side (no log at all, which
+    is exactly what made the original missing-wrapper bug hard to spot
+    without checking the target's console directly) -- a Python caller
+    should actually find out about a malformed wrapper via an exception,
+    not silence.
+    """
+    if len(raw) < 3:
+        raise ValueError(f"too short to contain the SMBus block wrapper: {len(raw)} bytes")
+    cmd_code, byte_count, src_addr_byte = raw[0], raw[1], raw[2]
+    if cmd_code != SMBUS_MCTP_CMD_CODE:
+        raise ValueError(
+            f"wrapper cmd_code 0x{cmd_code:02x} != MCTP's 0x{SMBUS_MCTP_CMD_CODE:02x} "
+            f"-- this isn't an MCTP-over-SMBus frame at all"
+        )
+    payload = raw[3:]
+    expected_payload_len = byte_count - 1  # byte_count includes src_addr itself
+    if len(payload) != expected_payload_len:
+        raise ValueError(
+            f"wrapper byte_count (0x{byte_count:02x}) says {expected_payload_len} payload "
+            f"bytes should follow src_addr, but {len(payload)} actually did"
+        )
+    src_i2c_addr = (src_addr_byte >> 1) & 0x7F
+    return src_i2c_addr, bytes(payload)
 
 
 def build_transport_header(dest_eid, src_eid, msg_tag=0, tag_owner=1, som=1, eom=1, pkt_seq=0):

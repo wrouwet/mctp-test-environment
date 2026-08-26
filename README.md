@@ -13,47 +13,49 @@ and the MCTP Control Protocol. No PLDM or other higher-layer message
 type is tested here; that would be a different project built on top of
 this one's foundation, not an extension of it.
 
-## Current status: built, not yet hardware-verified
+## Current status: hardware-verified as of 2026-08-25 (5/6 real, 1 open question)
 
-**Read this before trusting any test result from this repo.** Every
-other test-development effort in this project's family (see the sibling
-openbic-test-environment repo) was built by writing code, then
-immediately running it against real, connected hardware, adjusting
-based on what actually happened. This repo is different: it was built
-*before* the physical I2C bus it needs was wired up, at the user's
-explicit direction, specifically so the test harness would be ready the
-moment the hardware connection exists.
+This repo's first draft was built entirely *before* the physical I2C
+bus it needs was wired up, at the user's explicit direction -- see git
+history if you want the details of that phase. **That phase is over.**
+The bus is now wired (`flexcomm3_lpi2c3`, see "What you need" below) and
+the suite has run against real hardware for the first time.
 
-What that means concretely:
+Result: **first contact found a real, non-obvious bug**, exactly as
+this README used to warn it would -- the initial frame-building code
+was missing DSP0237's 3-byte SMBus block-write wrapper
+(`mctp.build_smbus_block_wrapper()`) that has to precede the MCTP
+transport header on every single frame. Without it, OpenBIC's
+`mctp_smbus_read()` silently discarded every request before MCTP-level
+parsing ever ran -- no log output at all, which is why "the write
+succeeds but nothing ever comes back" was the only symptom visible from
+this side; finding the actual cause took reading the target's console
+log on the peer's side. Once added, 5 of 6 tests started passing with
+genuine, real, bidirectional MCTP traffic:
 
-- The MCTP transport header, message-type byte, and MCTP Control header
-  layouts (`mctp.py`) are confirmed against the actual OpenBIC source
-  this project targets (peer-provided struct definitions, not just the
-  DSP0236 spec from memory) -- see that file's docstrings for exactly
-  what's confirmed.
-- The SMBus PEC (CRC-8) engine is verified against the published
-  CRC-8/SMBUS standard check value, independent of any hardware --
-  see `mctp.py`'s PEC functions.
-- The request/response round-trip logic, framing build/parse functions,
-  and instance-ID-matching logic have been unit-verified in isolation
-  (build a frame, parse it back, confirm the fields match) -- but NOT
-  against a real MCTP endpoint responding over a real bus.
-- Target facts (EID 0x09, I2C address 0x10 on `flexcomm3_lpi2c3`,
-  IPMB-shaped response addressing) are confirmed with the team
-  developing the OpenBIC port, not guessed.
-- What's genuinely unverified: whether OpenBIC's actual MCTP stack
-  behaves the way this suite assumes under real timing/bus conditions,
-  whether any of the response body formats this suite is conservative
-  about (see individual test docstrings) match reality, and whether the
-  bridge firmware's SMBus PEC support (also newly built, see the
-  firmware repo) actually interoperates correctly with a real
-  SMBus-PEC-aware device -- none of which has been possible to check
-  without the second I2C bus physically connected.
+- Get Endpoint ID: reports EID 0x09, endpoint-type byte 0x11 (STATIC/
+  BRIDGE) -- exactly the values source-confirmed with the peer session,
+  now also wire-confirmed.
+- Get Message Type Support: reports {Control, PLDM} -- also matches
+  the source-confirmed implementation, now wire-confirmed.
+- Set Endpoint ID: round-trips successfully.
+- The PEC-corruption framing test passes as designed.
 
-Once that wiring exists, running this suite for the first time should be
-treated as genuine, first-contact integration testing -- expect to find
-and fix real issues, the same way the sibling IPMB project did, not to
-see a clean pass on the first try.
+**One real, confirmed gap**: Get MCTP Version Support (cmd 0x04) isn't
+in OpenBIC's shared MCTP Control dispatch table at all (confirmed
+against source with the peer session) -- the dispatch loop's fallthrough
+always returns `ERROR_UNSUPPORTED_CMD` for this command, regardless of
+what selector byte is sent, on every OpenBIC board on mainline. Not a
+framing bug (the response is well-formed) and not fixable by trying a
+different request. Marked `not_implemented()`; see that test's docstring
+in `tests/test_mctp_control.py` for the full trace.
+
+What's still NOT verified, going forward: response body formats beyond
+what's been directly observed above, behavior of any command not yet
+exercised, and everything about fragmentation/multi-packet messages
+(this suite only sends single-packet, unfragmented requests so far).
+Treat every new test added here the same way this repo's first real run
+went -- expect genuine first-contact issues, not a clean pass.
 
 ## What you need before you start
 
