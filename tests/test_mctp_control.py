@@ -15,9 +15,11 @@ from config import (
     EXPECTED_EID_TYPE_ON_THIS_PLATFORM,
     EXPECTED_ENDPOINT_TYPE_ON_THIS_PLATFORM,
     EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM,
+    MCTP_TARGET_ADDR,
     TARGET_EID,
 )
 from mctp import (
+    CTRL_CC_ERROR,
     CTRL_CC_SUCCESS,
     CTRL_CMD_GET_ENDPOINT_ID,
     CTRL_CMD_GET_ENDPOINT_UUID,
@@ -147,22 +149,57 @@ def test_get_endpoint_uuid(bridge):
     )
 
 
-@mctp_helpers.not_implemented(
-    "Resolve Endpoint ID isn't in mctp_ctrl_cmd_tbl[] either -- same shared "
-    "dispatch table gap as Get MCTP Version Support/Get Endpoint UUID (see those "
-    "tests). Expected: this platform has no downstream routing at all (single "
-    "local endpoint, per the peer session's platform inventory), so Resolve "
-    "Endpoint ID wouldn't have anything meaningful to do here even if it were "
-    "wired up -- but the actual observed failure mode is the generic dispatch "
-    "fallthrough (0x05), not a routing-specific rejection, so that's what this "
-    "documents rather than assuming."
-)
-def test_resolve_endpoint_id(bridge):
-    """Resolve Endpoint ID (cmd 0x07)."""
+def test_resolve_endpoint_id_own_eid(bridge):
+    """Resolve Endpoint ID (cmd 0x07) for the endpoint's own EID.
+
+    Another confirmed-gap-turned-real-feature, implemented honestly
+    given this board has no downstream routing table: resolving the
+    endpoint's OWN EID returns bridge_eid == target_eid (0x09) -- per
+    DSP0236 12.10's own convention for "no bridging needed, this is
+    local" -- and the real physical SMBus address (0x10), pulled live
+    from the running mctp instance's medium config, not hardcoded.
+    Resolving any OTHER EID is a genuine, honest error (see
+    test_resolve_endpoint_id_unknown_eid below) rather than a fabricated
+    resolution, since there's really nothing else to route to.
+    """
     decoded = mctp_helpers.send_mctp_control_command(
         bridge, CTRL_CMD_RESOLVE_ENDPOINT_ID, data=bytes([TARGET_EID])
     )
     assert decoded["completion_code"] == CTRL_CC_SUCCESS
+    assert len(decoded["data"]) == 2, f"expected [bridge_eid, phys_addr], got {decoded['data'].hex(' ')}"
+    bridge_eid, phys_addr = decoded["data"]
+    assert bridge_eid == TARGET_EID, (
+        f"expected bridge_eid == target_eid (0x{TARGET_EID:02x}) for resolving our own EID "
+        f"(DSP0236's 'no bridging needed' convention), got 0x{bridge_eid:02x}"
+    )
+    # phys_addr came back as 0x20, not the raw 7-bit 0x10 -- confirmed
+    # live, 2026-08-25, to be the standard 8-bit left-shifted address
+    # representation (addr << 1), the same convention already used
+    # throughout this protocol for the SMBus wrapper's own src_addr
+    # field (see mctp.build_smbus_block_wrapper()), not a bug.
+    expected_phys_addr = (MCTP_TARGET_ADDR << 1) & 0xFF
+    assert phys_addr == expected_phys_addr, (
+        f"expected phys_addr == our real SMBus address in 8-bit form "
+        f"(0x{expected_phys_addr:02x}), got 0x{phys_addr:02x}"
+    )
+
+
+def test_resolve_endpoint_id_unknown_eid(bridge):
+    """Resolve Endpoint ID (cmd 0x07) for an EID that isn't this
+    endpoint's own -- with no routing table, this board has nothing
+    else to resolve to, so a genuine error is the honest, correct
+    response, not a fabricated success.
+    """
+    unknown_eid = 0xFF
+    assert unknown_eid != TARGET_EID
+    decoded = mctp_helpers.send_mctp_control_command(
+        bridge, CTRL_CMD_RESOLVE_ENDPOINT_ID, data=bytes([unknown_eid])
+    )
+    assert decoded["completion_code"] == CTRL_CC_ERROR, (
+        f"expected a genuine ERROR (0x01) resolving an EID (0x{unknown_eid:02x}) this "
+        f"board has no route to, got 0x{decoded['completion_code']:02x}"
+    )
+    assert len(decoded["data"]) == 0, f"expected no data on error, got {decoded['data'].hex(' ')}"
 
 
 def test_set_endpoint_id_idempotent(bridge):
