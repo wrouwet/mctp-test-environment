@@ -254,15 +254,28 @@ def build_control_request(dest_eid, src_eid, cmd, data=b"", inst_id=0, msg_tag=0
     return transport + bytes([msg_type_ic_byte, rq_d_inst_byte, cmd]) + bytes(data)
 
 
-# Confirmed against source with the peer session, 2026-08-25:
-# MCTP_DEFAULT_MSG_MAX_SIZE in this platform's mctp.c is 244 bytes, used
-# directly for TX-side packetization -- NOT the DSP0236 64-byte baseline
-# MTU this module originally assumed before confirming. There's no
-# runtime MTU negotiation on this implementation at all; it's a
-# compile-time constant both ends have to agree on out-of-band. To force
-# real multi-packet fragmentation against this platform, a message body
-# needs to exceed this, not 64 bytes.
-MTU = 244
+# The real story, in order (2026-08-25): this platform's
+# MCTP_DEFAULT_MSG_MAX_SIZE was originally 244 bytes, confirmed against
+# source and used here believing it was simply this platform's chosen
+# per-packet chunk size. A 244-byte chunk turned out to never actually
+# reach the target intact -- the peer session's own diagnostic logging
+# showed our first fragment arriving at only 128 bytes, not ~251, which
+# led straight to a real bug in THIS project's own bridge firmware: its
+# W/WS command line parser silently truncated any write whose hex data
+# exceeded I2C_CMD_MAX_DATA (then 128, no room for a 244-byte MCTP
+# chunk plus its wrapper/header/PEC overhead) and still replied "OK" as
+# if nothing were wrong -- the write only ever *looked* successful.
+# Fixed on the bridge side (an explicit "ERR data too long" instead of
+# silent truncation), but 244 was never spec-safe in the first place:
+# DSP0236 sec 8.4 only guarantees a 64-byte baseline MTU without an
+# explicit negotiation step neither stack implements. The peer session
+# dropped their own default to that 64-byte baseline to match spec, and
+# this module follows suit -- 64 comfortably fits within the bridge's
+# transport capacity too (wrapper + header + 64-byte chunk + PEC = 72
+# bytes, well under I2C_CMD_MAX_DATA), so both sides are now aligned on
+# a value that's actually safe on every layer, not just the one that
+# happened to not get caught in casual single-packet testing.
+MTU = 64
 
 # Total reassembled-message size cap (MSG_ASSEMBLY_BUF_SIZE), confirmed
 # against source: mctp_pkt_assembling() explicitly checks against this

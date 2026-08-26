@@ -27,6 +27,41 @@ if WRONG_EID in (0x00, 0xFF):
     WRONG_EID = (TARGET_EID + 2) & 0xFF
 
 
+def _send_get_endpoint_id_and_report(bridge, dest_eid, label):
+    """Shared plumbing for the dest_eid addressing tests below: send a
+    well-formed, correctly-PEC'd Get Endpoint ID request to `dest_eid`,
+    and return (got_matching_response, decoded_or_None) rather than
+    asserting anything itself -- each caller decides what a match or a
+    timeout actually means for its specific dest_eid.
+    """
+    inst_id = mctp_helpers.next_inst_id()
+    msg_tag = mctp_helpers.next_msg_tag()
+    mctp_payload = mctp.build_control_request(
+        dest_eid=dest_eid, src_eid=OUR_EID, cmd=CTRL_CMD_GET_ENDPOINT_ID,
+        inst_id=inst_id, msg_tag=msg_tag,
+    )
+    wrapper = mctp.build_smbus_block_wrapper(OUR_I2C_ADDR, mctp_payload)
+    request = wrapper + mctp_payload
+    print(f"request bytes ({label}, dest_eid=0x{dest_eid:02x}): {request.hex(' ')}")
+    bridge.smbus_write(MCTP_TARGET_ADDR, request)
+
+    try:
+        raw = bridge.listen(OUR_I2C_ADDR)
+    except BridgeError as exc:
+        print(f"no response arrived ({exc})")
+        return False, None
+
+    print(f"got a response: {raw.hex(' ')}")
+    after_pec = mctp_helpers._verify_and_strip_pec(raw)
+    _, mctp_response = mctp.parse_smbus_block_wrapper(after_pec)
+    decoded = mctp.parse_control_response(mctp_response)
+    print(f"decoded: {decoded}")
+    matches = decoded["cmd"] == CTRL_CMD_GET_ENDPOINT_ID and decoded["inst_id"] == inst_id
+    if not matches:
+        print("(doesn't match this request -- stale from something else, inconclusive)")
+    return matches, (decoded if matches else None)
+
+
 def test_request_to_wrong_dest_eid_is_ignored(bridge):
     """Send an otherwise well-formed, correctly-PEC'd Get Endpoint ID
     request, but addressed to WRONG_EID instead of TARGET_EID.
@@ -39,39 +74,52 @@ def test_request_to_wrong_dest_eid_is_ignored(bridge):
     investigating, not a quirky "huh, interesting" -- so this now
     asserts the confirmed-correct behavior rather than just observing.
     """
-    inst_id = mctp_helpers.next_inst_id()
-    msg_tag = mctp_helpers.next_msg_tag()
-    mctp_payload = mctp.build_control_request(
-        dest_eid=WRONG_EID, src_eid=OUR_EID, cmd=CTRL_CMD_GET_ENDPOINT_ID,
-        inst_id=inst_id, msg_tag=msg_tag,
+    matched, _ = _send_get_endpoint_id_and_report(bridge, WRONG_EID, "wrong EID")
+    assert not matched, (
+        f"the endpoint responded to a request addressed to dest_eid=0x{WRONG_EID:02x}, "
+        f"not its own EID (0x{TARGET_EID:02x}) -- dest_eid enforcement appears to have "
+        f"regressed"
     )
-    wrapper = mctp.build_smbus_block_wrapper(OUR_I2C_ADDR, mctp_payload)
-    request = wrapper + mctp_payload
-    print(f"request bytes (dest_eid=0x{WRONG_EID:02x}, NOT this endpoint's "
-          f"own EID 0x{TARGET_EID:02x}): {request.hex(' ')}")
-    bridge.smbus_write(MCTP_TARGET_ADDR, request)
 
-    try:
-        raw = bridge.listen(OUR_I2C_ADDR)
-    except BridgeError as exc:
-        print(f"no response arrived -- consistent with DSP0236: an endpoint "
-              f"should ignore a request addressed to a dest_eid that isn't its "
-              f"own (or null/broadcast): {exc}")
-        return
 
-    print(f"got a response anyway: {raw.hex(' ')}")
-    after_pec = mctp_helpers._verify_and_strip_pec(raw)
-    _, mctp_response = mctp.parse_smbus_block_wrapper(after_pec)
-    decoded = mctp.parse_control_response(mctp_response)
-    print(f"decoded: {decoded}")
-    if decoded["cmd"] == CTRL_CMD_GET_ENDPOINT_ID and decoded["inst_id"] == inst_id:
-        print(f"NOTABLE: the endpoint responded to a request addressed to "
-              f"dest_eid=0x{WRONG_EID:02x}, not its own EID (0x{TARGET_EID:02x}) -- "
-              f"dest_eid does not appear to be checked/enforced on this platform. "
-              f"Not asserting this as a failure (single local endpoint on a private "
-              f"bus, real-world impact is limited), but worth flagging to the peer "
-              f"session as a genuine, previously-unconfirmed behavior.")
+def test_request_to_broadcast_eid(bridge):
+    """Send a Get Endpoint ID request addressed to the broadcast EID
+    (0xFF) instead of TARGET_EID.
+
+    Genuinely unconfirmed territory, unlike the wrong-EID case above:
+    DSP0236 has real, legitimate uses for broadcast addressing (e.g.
+    Endpoint Discovery), but whether a general Control command like Get
+    Endpoint ID sent to the broadcast EID should be processed by an
+    already-assigned endpoint isn't something this project has a
+    confirmed answer for. Observing and reporting rather than asserting
+    either outcome -- this is a "let's find out" test, not a
+    conformance check with a known-correct answer yet.
+    """
+    matched, decoded = _send_get_endpoint_id_and_report(bridge, 0xFF, "broadcast EID")
+    if matched:
+        print("the endpoint responds to Get Endpoint ID sent to the broadcast EID -- "
+              "noted, not asserted as right or wrong without a confirmed spec answer "
+              "for this specific case")
     else:
-        print("got a response, but it doesn't match this request (stale from "
-              "something else) -- inconclusive either way, not treating as evidence "
-              "that dest_eid is or isn't checked")
+        print("the endpoint does not respond to Get Endpoint ID sent to the broadcast "
+              "EID -- also noted, same caveat")
+
+
+def test_request_to_null_eid(bridge):
+    """Send a Get Endpoint ID request addressed to the null EID (0x00)
+    instead of TARGET_EID.
+
+    Same "let's find out" framing as the broadcast-EID test above: the
+    null EID has a real, specific meaning in MCTP (an endpoint that
+    hasn't been assigned a real EID yet listens here for discovery), but
+    this endpoint already has a real, assigned EID (0x09) -- whether it
+    also still answers at the null EID isn't confirmed either way.
+    """
+    matched, decoded = _send_get_endpoint_id_and_report(bridge, 0x00, "null EID")
+    if matched:
+        print("the endpoint responds to Get Endpoint ID sent to the null EID even "
+              "though it already has a real assigned EID -- noted, not asserted as "
+              "right or wrong without a confirmed spec answer for this specific case")
+    else:
+        print("the endpoint does not respond to Get Endpoint ID sent to the null EID "
+              "-- also noted, same caveat")
