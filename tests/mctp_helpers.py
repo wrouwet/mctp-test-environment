@@ -55,12 +55,10 @@ def send_mctp_control_command(bridge, cmd, data=b"", max_drain=3, dest_eid=None)
     hard failure outright, same reasoning as the sibling project (a
     slow/retried response can arrive later than expected).
 
-    NOT yet verified against real hardware (see config.py's status
-    note) -- this is built from confirmed header layouts and the
-    confirmed "responder becomes bus master" addressing pattern, but the
-    actual round trip (timing, retry behavior, whether OpenBIC's MCTP
-    stack behaves the way this assumes under real conditions) is
-    unverified until the physical bus is wired up.
+    Hardware-verified -- the round trip (SMBus wrapper, PEC on the
+    slave-mode capture, the "responder becomes bus master and writes
+    back" pattern, msg_tag/inst_id matching) all runs green against the
+    live OpenBIC endpoint.
     """
     inst_id = next_inst_id()
     msg_tag = next_msg_tag()

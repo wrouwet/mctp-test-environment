@@ -5,24 +5,20 @@ OpenBIC port (meta-facebook/mcx-n9xx-evk, full-board-port branch),
 2026-08-25 -- see each constant's comment for what's confirmed vs.
 chosen arbitrarily on our own side.
 
-IMPORTANT STATUS NOTE, as of repo creation (2026-08-25): this project
-has NOT yet been run against real hardware. The physical second I2C bus
-this needs hasn't been wired up yet (MCTP lives on a different bus than
-the sibling ipmi-test-environment project's IPMB bridge -- the
-MCXA153 bridge chip only has one hardware I2C peripheral, so this is a
-genuinely separate physical connection, not just a config change). Every
-test here is built from confirmed source facts and spec-compliant
-framing, not guesses -- but "structurally correct" and "verified against
-real hardware" are different claims, and only the former is true right
-now. See the README for the full story.
+STATUS (2026-08-28): hardware-verified, 18 passed / 3 skipped. Since the
+2026-08-27 bus consolidation the MCTP endpoint is a second I2C target
+address (0x10) on the SAME bus as IPMB (0x20) -- target
+`flexcomm2_lpi2c2` -- so this suite runs on the sibling
+ipmi-test-environment's exact hardware setup, no separate bus. See the
+README for the full history.
 """
 
 CC_SUCCESS = 0x00
 
-# The MCTP endpoint's I2C/SMBus slave address on the target board's
-# flexcomm3_lpi2c3 bus (PLAT_MCTP_I2C_TARGET_ADDR in plat_mctp.h) --
-# a DIFFERENT physical bus than the sibling ipmi-test-environment
-# project's IPMB connection.
+# The MCTP endpoint's I2C/SMBus target address (PLAT_MCTP_I2C_TARGET_ADDR
+# in plat_mctp.h). Since the 2026-08-27 consolidation this is a second
+# registered target address on `flexcomm2_lpi2c2` -- the SAME physical
+# bus as IPMB (0x20).
 MCTP_TARGET_ADDR = 0x10
 
 # The MCTP endpoint's own EID (PLAT_MCTP_EID in plat_mctp.h). This
