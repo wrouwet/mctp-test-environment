@@ -9,6 +9,9 @@ rest for visibility, rather than guessing at bit-level response
 structure the way this project's sibling got burned doing for IPMI once.
 """
 
+import os
+import pytest
+
 import mctp
 import mctp_helpers
 from config import (
@@ -99,15 +102,13 @@ def test_get_message_type_support(bridge):
     """Get Message Type Support (cmd 0x05). Every MCTP endpoint must
     support this.
 
-    This command had a real, previously-unknown gap on this platform:
-    load_mctp_support_types() was an unimplemented __weak default
-    (returning a bare error, not a real type list) until the peer
-    session implemented it for real, 2026-08-25 -- confirmed with them
-    that this platform's dispatch genuinely handles both MCTP Control
-    (0x00) and PLDM (0x01), and the handler now reports exactly those
-    two. Same "reasoned through the code, not wire-verified yet" caveat
-    as everything else in this repo -- see EXPECTED_SUPPORTED_MESSAGE_
-    TYPES_ON_THIS_PLATFORM's comment in config.py.
+    Live-observed set has grown as the port gained features: Control +
+    PLDM (2026-08-25 __weak default replaced with a real
+    load_mctp_support_types), then Vendor-PCI 0x7E (test echo command),
+    then SPDM 0x05 (2026-08-28, DMTF libspdm 3.8.2 integration -- see the
+    sibling spdm-test-environment). This assertion is exact, so it fails
+    loudly the next time the set changes -- update EXPECTED_SUPPORTED_
+    MESSAGE_TYPES_ON_THIS_PLATFORM in config.py when it does.
     """
     decoded = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_MESSAGE_TYPE_SUPPORT)
     assert decoded["completion_code"] == CTRL_CC_SUCCESS
@@ -231,3 +232,53 @@ def test_set_endpoint_id_idempotent(bridge):
     follow_up = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_ENDPOINT_ID)
     assert follow_up["completion_code"] == CTRL_CC_SUCCESS
     assert follow_up["data"][0] == TARGET_EID
+
+
+_NEEDS_HUMAN = pytest.mark.skipif(
+    os.environ.get("MCTP_INTERACTIVE") != "1",
+    reason="set MCTP_INTERACTIVE=1 and have someone able to cold-reboot the board",
+)
+
+
+@_NEEDS_HUMAN
+def test_set_endpoint_id_persists_across_reboot(bridge):
+    """A REAL Set Endpoint ID change (TARGET_EID -> a probe EID), verified
+    to survive a cold reboot via NVS, then restored.
+
+    Interactive: needs a person/peer able to run `kernel reboot cold` on
+    the OpenBIC console on cue. Confirmed live 2026-08-28: set 0x09 ->
+    0x0A, `kernel reboot cold`, boot log "restored MCTP EID 0x0a from
+    storage", Get Endpoint ID at 0x0A returned 0x0a; restored to 0x09.
+
+    Runs last-ish and restores TARGET_EID before returning so it doesn't
+    strand the other tests (which all address TARGET_EID).
+    """
+    probe_eid = 0x0A if TARGET_EID != 0x0A else 0x0B
+    SET = 0x00
+
+    s = mctp_helpers.send_mctp_control_command(
+        bridge, CTRL_CMD_SET_ENDPOINT_ID, data=bytes([SET, probe_eid]))
+    assert s["completion_code"] == CTRL_CC_SUCCESS
+    live = mctp_helpers.send_mctp_control_command(
+        bridge, CTRL_CMD_GET_ENDPOINT_ID, dest_eid=probe_eid)
+    assert live["completion_code"] == CTRL_CC_SUCCESS and live["data"][0] == probe_eid, (
+        f"endpoint didn't move to 0x{probe_eid:02x} pre-reboot"
+    )
+
+    try:
+        input(f"\n>>> EID is now 0x{probe_eid:02x}. Run `kernel reboot cold` on the "
+              f"OpenBIC console; when the boot banner shows, press Enter here... ")
+        after = mctp_helpers.send_mctp_control_command(
+            bridge, CTRL_CMD_GET_ENDPOINT_ID, dest_eid=probe_eid)
+        assert after["completion_code"] == CTRL_CC_SUCCESS and after["data"][0] == probe_eid, (
+            f"EID did NOT persist: Get Endpoint ID at 0x{probe_eid:02x} after reboot "
+            f"-> cc 0x{after['completion_code']:02x}, data {after['data'].hex(' ')}"
+        )
+        print(f"EID 0x{probe_eid:02x} persisted across cold reboot")
+    finally:
+        r = mctp_helpers.send_mctp_control_command(
+            bridge, CTRL_CMD_SET_ENDPOINT_ID, data=bytes([SET, TARGET_EID]),
+            dest_eid=probe_eid)
+        assert r["completion_code"] == CTRL_CC_SUCCESS, "failed to restore TARGET_EID!"
+        back = mctp_helpers.send_mctp_control_command(bridge, CTRL_CMD_GET_ENDPOINT_ID)
+        assert back["data"][0] == TARGET_EID

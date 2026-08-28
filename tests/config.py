@@ -42,19 +42,14 @@ TARGET_EID = 0x09
 OUR_I2C_ADDR = 0x08
 OUR_EID = 0x08
 
-# Confirmed against source with the peer session, 2026-08-25 (reasoned
-# through the code, NOT wire-verified -- same caveat as everything else
-# in this repo until the second bus is physically connected):
-# this platform's Get Endpoint ID handler sets eid_type=STATIC_EID and
-# endpoint_type=BRIDGE, i.e. mctp.EID_TYPE_STATIC / mctp.ENDPOINT_TYPE_BRIDGE.
+# Get Endpoint ID's endpoint-type byte: eid_type=STATIC_EID,
+# endpoint_type=BRIDGE. Source-confirmed 2026-08-25 and wire-verified
+# 2026-08-28 (byte 0x11 = `09 11 00`, decoded static/bridge).
 EXPECTED_EID_TYPE_ON_THIS_PLATFORM = 1  # mctp.EID_TYPE_STATIC
 EXPECTED_ENDPOINT_TYPE_ON_THIS_PLATFORM = 1  # mctp.ENDPOINT_TYPE_BRIDGE
 
-# Confirmed live, 2026-08-25: this platform's dispatch handles MCTP
-# Control, PLDM, and (once the peer session added the Vendor-PCI test
-# echo command) Vendor Defined-PCI (0x7E) -- load_mctp_support_types()
-# now reports all three. Updated from an earlier (0x00, 0x01)-only
-# version once the echo command's addition changed this platform's
-# real, live-observed message type list -- not a guess, an actual
-# wire-confirmed change following a real feature addition.
-EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM = (0x00, 0x01, 0x7E)  # Control, PLDM, Vendor-PCI
+# MCTP message types the endpoint advertises (Get Message Type Support),
+# live-observed. 0x7E (Vendor-PCI test echo) added 2026-08-25; 0x05
+# (SPDM) added 2026-08-28 when the peer integrated DMTF libspdm 3.8.2 --
+# see the sibling spdm-test-environment.
+EXPECTED_SUPPORTED_MESSAGE_TYPES_ON_THIS_PLATFORM = (0x00, 0x01, 0x05, 0x7E)  # Control, PLDM, SPDM, Vendor-PCI

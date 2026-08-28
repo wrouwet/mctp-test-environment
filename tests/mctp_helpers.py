@@ -43,7 +43,7 @@ def next_msg_tag():
     return next(_next_msg_tag) % 8
 
 
-def send_mctp_control_command(bridge, cmd, data=b"", max_drain=3):
+def send_mctp_control_command(bridge, cmd, data=b"", max_drain=3, dest_eid=None):
     """Build an MCTP Control Protocol request with a fresh instance ID,
     send it, and return the decoded response that actually answers it.
 
@@ -64,8 +64,10 @@ def send_mctp_control_command(bridge, cmd, data=b"", max_drain=3):
     """
     inst_id = next_inst_id()
     msg_tag = next_msg_tag()
+    # dest_eid defaults to TARGET_EID; pass an explicit value to address
+    # the endpoint after a live Set Endpoint ID has changed it.
     mctp_payload = mctp.build_control_request(
-        dest_eid=TARGET_EID,
+        dest_eid=TARGET_EID if dest_eid is None else dest_eid,
         src_eid=OUR_EID,
         cmd=cmd,
         data=data,
