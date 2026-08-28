@@ -14,7 +14,7 @@ command protocol:
                                         byte) flavor of W/R/X, same args
 
 This is a near-identical copy of the client living in the sibling
-openbic-test-environment project (same bridge firmware, same protocol)
+ipmi-test-environment project (same bridge firmware, same protocol)
 -- duplicated rather than imported across repos so this project stays
 independently clonable/runnable on its own, matching that project's own
 "keep repos focused and self-contained" design. The one real difference
@@ -49,7 +49,7 @@ try:
     # termios.error is a plain Exception, *not* an OSError subclass (which
     # is what you'd expect from a low-level POSIX errno-style failure).
     # Found this by actually killing the link mid-command in testing (on
-    # the sibling openbic-test-environment project): reset_input_buffer()
+    # the sibling ipmi-test-environment project): reset_input_buffer()
     # on a dead fd raises termios.error, and a bare `except OSError`
     # silently missed it, leaving the client hung instead of reconnecting.
     # Windows has no termios module at all, hence the guarded import.
@@ -327,7 +327,7 @@ class I2CBridge:
         our_addr and capture whatever addr writes back.
 
         Despite the name (kept for consistency with the sibling
-        openbic-test-environment project, where this exists specifically
+        ipmi-test-environment project, where this exists specifically
         for IPMB), this is a transport-layer primitive with nothing IPMB-
         specific about it: it's for any target that responds by becoming
         bus master itself and writing its response out to whichever

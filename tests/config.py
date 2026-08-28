@@ -8,7 +8,7 @@ chosen arbitrarily on our own side.
 IMPORTANT STATUS NOTE, as of repo creation (2026-08-25): this project
 has NOT yet been run against real hardware. The physical second I2C bus
 this needs hasn't been wired up yet (MCTP lives on a different bus than
-the sibling openbic-test-environment project's IPMB bridge -- the
+the sibling ipmi-test-environment project's IPMB bridge -- the
 MCXA153 bridge chip only has one hardware I2C peripheral, so this is a
 genuinely separate physical connection, not just a config change). Every
 test here is built from confirmed source facts and spec-compliant
@@ -21,7 +21,7 @@ CC_SUCCESS = 0x00
 
 # The MCTP endpoint's I2C/SMBus slave address on the target board's
 # flexcomm3_lpi2c3 bus (PLAT_MCTP_I2C_TARGET_ADDR in plat_mctp.h) --
-# a DIFFERENT physical bus than the sibling openbic-test-environment
+# a DIFFERENT physical bus than the sibling ipmi-test-environment
 # project's IPMB connection.
 MCTP_TARGET_ADDR = 0x10
 

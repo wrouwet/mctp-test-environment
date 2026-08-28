@@ -1,7 +1,7 @@
 """Shared plumbing for every MCTP test in this suite -- the request/
 response round trip, PEC verification for slave-mode-captured responses,
 and the not_implemented() backlog marker. Mirrors the sibling
-openbic-test-environment project's ipmi_helpers.py structure and
+ipmi-test-environment project's ipmi_helpers.py structure and
 conventions deliberately, per the user's explicit ask to build this
 project "using same test style/environment".
 """
@@ -264,7 +264,7 @@ def receive_possibly_fragmented_response(bridge, cmd, inst_id, msg_tag, max_frag
 def not_implemented(reason):
     """Mark a test as expected to fail because this OpenBIC port doesn't
     implement the command/behavior it exercises yet -- identical
-    mechanism and reasoning to the sibling openbic-test-environment
+    mechanism and reasoning to the sibling ipmi-test-environment
     project's ipmi_helpers.not_implemented(): pytest.mark.xfail(strict=
     True), so the moment real support lands and the test starts
     genuinely passing, the run FAILS loudly (XPASS) instead of quietly

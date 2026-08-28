@@ -1,7 +1,7 @@
 """Queue/timing behavior under back-to-back requests -- not tied to any
 one MCTP Control command.
 
-Mirrors the sibling openbic-test-environment project's IPMB queue-depth
+Mirrors the sibling ipmi-test-environment project's IPMB queue-depth
 stress test, which found a real, documented 1-deep outbound TX queue
 constraint on that transport. This was a fresh, independent probe for
 MCTP rather than an assumption that the IPMB result would carry over --

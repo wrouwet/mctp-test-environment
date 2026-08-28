@@ -4,7 +4,7 @@ A pytest-based test suite, run from a host PC, for exercising an
 [OpenBIC](https://github.com/facebook/OpenBIC) controller's MCTP
 (Management Component Transport Protocol) endpoint over SMBus/I2C.
 Sibling project to
-[openbic-test-environment](https://github.com/wrouwet/openbic-test-environment)
+[ipmi-test-environment](https://github.com/wrouwet/ipmi-test-environment)
 (which tests the same kind of controller over IPMB) -- same test style
 and philosophy, different transport/protocol.
 
@@ -21,7 +21,7 @@ history if you want the details of that phase. **That phase is over.**
 The bus is now wired (`flexcomm3_lpi2c3`, see "What you need" below),
 and this project and the peer session developing the OpenBIC firmware
 are now in the same live, iterative rhythm the sibling
-openbic-test-environment project settled into: they develop real MCTP
+ipmi-test-environment project settled into: they develop real MCTP
 features, this suite develops real test coverage, neither blocking on
 the other, looping back whenever something needs confirming.
 
@@ -113,7 +113,7 @@ python3 -m venv .venv
 ```
 
 To also save a copy of the full run to `test_report.txt` (same
-convention as the sibling openbic-test-environment project), use
+convention as the sibling ipmi-test-environment project), use
 `./run_tests.sh` instead of the raw `pytest` command above.
 
 Without the hardware from above connected, expect every test to fail at

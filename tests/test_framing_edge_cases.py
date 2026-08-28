@@ -3,7 +3,7 @@ command.
 
 NOT yet run against real hardware -- see config.py's status note. This
 one is additionally speculative in a second way: unlike the sibling
-openbic-test-environment project's identically-shaped checksum test
+ipmi-test-environment project's identically-shaped checksum test
 (confirmed against source before being written), nobody has confirmed
 from source what OpenBIC's MCTP-over-SMBus stack actually does with a
 bad PEC -- reject the I2C transaction outright (NAK, if PEC is checked
