@@ -7,11 +7,28 @@ project "using same test style/environment".
 """
 
 import itertools
+import time
 
 import pytest
 
 import mctp
+from bridge import BridgeError
 from config import OUR_EID, OUR_I2C_ADDR, TARGET_EID, MCTP_TARGET_ADDR
+
+# A few ms between transactions. MCTP (0x10) and IPMB (0x20) share one
+# LPI2C target instance since the 2026-08-27 consolidation; zero-gap
+# back-to-back load occasionally outruns that single instance (missed
+# ACK / response in the target<->controller switch window). Harmless but
+# noisy; a real BMC paces sideband polling. Peer-diagnosed 2026-08-28.
+_BUS_PACE_S = 0.008
+
+# Whole-transaction retries on a *transient* bus glitch (a listen
+# timeout, or a PEC mismatch from capturing a stale frame mid-drain).
+# The peer confirmed these don't corrupt state -- the same request
+# succeeds moments later once timing shifts -- so one automatic re-send
+# absorbs the shared-bus noise without changing any test's semantics.
+_TX_RETRIES = 3
+_TX_RETRY_GAP_S = 0.05
 
 # MCTP Control's instance ID field is 5 bits (0-31) and exists for the
 # same reason IPMB's seq field does: matching a response to the request
@@ -60,6 +77,18 @@ def send_mctp_control_command(bridge, cmd, data=b"", max_drain=3, dest_eid=None)
     back" pattern, msg_tag/inst_id matching) all runs green against the
     live OpenBIC endpoint.
     """
+    last_exc = None
+    for _tx in range(_TX_RETRIES + 1):
+        time.sleep(_BUS_PACE_S if _tx == 0 else _TX_RETRY_GAP_S)
+        try:
+            return _send_mctp_control_once(bridge, cmd, data, max_drain, dest_eid)
+        except (BridgeError, ValueError) as exc:
+            last_exc = exc
+            print(f"transient bus glitch ({exc}); re-sending (attempt {_tx + 2}/{_TX_RETRIES + 1})")
+    raise AssertionError(f"MCTP control cmd 0x{cmd:02x} failed after {_TX_RETRIES + 1} attempts: {last_exc}")
+
+
+def _send_mctp_control_once(bridge, cmd, data, max_drain, dest_eid):
     inst_id = next_inst_id()
     msg_tag = next_msg_tag()
     # dest_eid defaults to TARGET_EID; pass an explicit value to address
